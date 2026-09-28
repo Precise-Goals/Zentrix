@@ -77,9 +77,9 @@ const GigCard: React.FC<{ gig: GigCardData }> = ({ gig }) => (
         <div
           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-mono font-black"
           style={{
-            background: "rgba(163, 4, 2, 0.08)",
+            background: "color-mix(in srgb, var(--zx-primary-deep) 8%, transparent)",
             color: "var(--zx-primary-deep)",
-            border: "1px solid rgba(163, 4, 2, 0.2)",
+            border: "1px solid color-mix(in srgb, var(--zx-primary-deep) 20%, transparent)",
           }}
         >
           <Coins className="w-3.5 h-3.5 text-[var(--zx-primary)]" />
@@ -415,20 +415,20 @@ export const AgentPage: React.FC = () => {
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
-  // Dynamic on-chain NFT pass tier detection (0 = Free: 2, 1 = Pro: 10, 2 = Enterprise: 15)
+  // Dynamic on-chain NFT pass tier detection (0 = Free: 5, 1 = Pro: 10, 2 = Enterprise: 15)
   const [userTier, setUserTier] = useState<number>(() => {
     const cached = getCachedNFTAssets(address);
     return cached.passTier || 0;
   });
 
-  const maxCredits = userTier === 2 ? 15 : userTier === 1 ? 10 : 2;
+  const maxCredits = userTier === 2 ? 15 : userTier === 1 ? 10 : 5;
   const [creditsLeft, setCreditsLeft] = useState<number>(maxCredits);
 
   // Scan on-chain NFT assets whenever address or provider changes
   useEffect(() => {
     if (!address) {
       setUserTier(0);
-      setCreditsLeft(2);
+      setCreditsLeft(5);
       return;
     }
 
@@ -443,13 +443,13 @@ export const AgentPage: React.FC = () => {
           setUserTier(res.passTier);
         }
       })
-      .catch((err) => console.warn("[Agent] Failed to scan NFT pass tier:", err));
+      .catch(() => {});
   }, [address, provider]);
 
   // Synchronize creditsLeft ceiling when userTier changes
   useEffect(() => {
     setCreditsLeft((prev) => {
-      if (prev <= 2 && maxCredits > 2) return maxCredits;
+      if (prev <= 5 && maxCredits > 5) return maxCredits;
       return Math.min(prev, maxCredits);
     });
   }, [maxCredits]);
@@ -577,7 +577,7 @@ export const AgentPage: React.FC = () => {
               className="w-10 h-10 flex items-center justify-center p-0 shrink-0"
               style={{overflow:"hidden", background: "var(--zx-primary-deep)", borderRadius: "6rem" }}
             >
-                <img src="/robot.png" alt="Sarvam AI Agent" className="robocontain" />
+                <img src="/Robot.png" alt="AI Bot" className="robocontain" />
             </div>
             <div>
               <h1 className="text-xl font-extrabold text-[var(--zx-ink)]">Zentrix AI Agent</h1>
@@ -602,7 +602,7 @@ export const AgentPage: React.FC = () => {
                   ? "Enterprise Pass (15/day)"
                   : userTier === 1
                   ? "Pro Pass (10/day)"
-                  : "Free Tier (2/day)"}{" "}
+                  : "Free Tier (5/day)"}{" "}
                 · Resets Midnight IST
               </div>
             </div>
@@ -656,7 +656,7 @@ export const AgentPage: React.FC = () => {
                 className="w-16 h-16 flex items-center justify-center p-3"
                 style={{ background: "var(--zx-surface-alt)", borderRadius: "1.25rem" }}
               >
-                <img src="/robot.png" alt="Sarvam AI Agent" className="w-10 h-10 object-contain" />
+                <img src="/Robot.png" alt="AI Bot" className="w-10 h-10 object-contain" />
               </div>
               <div>
                 <p className="text-base font-bold text-[var(--zx-ink)]">Ask Zentrix AI</p>
@@ -722,7 +722,7 @@ export const AgentPage: React.FC = () => {
                   {m.role === "user" ? (
                     <User className="w-3.5 h-3.5" />
                   ) : (
-                    <img src="/robot.png" alt="Sarvam AI" className="w-4 h-4 object-contain" />
+                    <img src="/Robot.png" alt="AI Bot" className="w-4 h-4 object-contain" />
                   )}
                 </div>
 
@@ -925,7 +925,7 @@ export const AgentPage: React.FC = () => {
         {paywallOpen && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
-            style={{ background: "rgba(42, 15, 15, 0.45)", backdropFilter: "blur(4px)" }}
+            style={{ background: "color-mix(in srgb, var(--zx-primary-deep) 45%, transparent)", backdropFilter: "blur(4px)" }}
           >
             <div
               className="w-full max-w-md p-6 text-center space-y-4"
@@ -933,7 +933,7 @@ export const AgentPage: React.FC = () => {
                 background: "var(--zx-surface)",
                 border: "1px solid var(--zx-border)",
                 borderRadius: "1.25rem",
-                boxShadow: "0 25px 50px -12px rgba(42, 15, 15, 0.25)",
+                boxShadow: "0 25px 50px -12px color-mix(in srgb, var(--zx-primary-deep) 25%, transparent)",
               }}
             >
               <div

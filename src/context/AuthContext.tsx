@@ -102,8 +102,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             localStorage.setItem(`zx_user_profile_${fbUser.uid}`, JSON.stringify(data));
             resolved = true;
           }
-        } catch (e) {
-          console.warn("[Auth] RTDB read warning:", (e as any)?.message);
+        } catch {
+          // RTDB read non-critical, will fallback to Firestore
         }
 
         // 3. Fallback to Firestore with timeout if not found in RTDB
@@ -146,16 +146,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return res.user;
     } catch (e: any) {
       if (e?.code === "auth/popup-blocked" || e?.code === "auth/popup-closed-by-user") {
-        console.warn("Popup blocked or closed, falling back to redirect:", e);
         try {
           await signInWithRedirect(auth, googleProvider);
           return null;
         } catch (redirectErr) {
-          console.error("Google sign in redirect failed:", redirectErr);
           throw redirectErr;
         }
       }
-      console.error("Google sign in failed:", e);
       throw e;
     }
   };
@@ -166,7 +163,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await signInWithEmailAndPassword(auth, email, pass);
       return res.user;
     } catch (e) {
-      console.error("Email login failed:", e);
       throw e;
     } finally {
       setLoading(false);
@@ -179,7 +175,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await createUserWithEmailAndPassword(auth, email, pass);
       return res.user;
     } catch (e) {
-      console.error("Registration failed:", e);
       throw e;
     } finally {
       setLoading(false);
@@ -257,8 +252,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         uid: user.uid,
         boundAt: Date.now(),
       });
-    } catch (e) {
-      console.warn("[Auth] RTDB save warning:", (e as any)?.message);
+    } catch {
+      // RTDB save non-critical — localStorage already persisted
     }
 
     // 3. Asynchronously attempt Firestore sync without blocking
@@ -318,8 +313,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await set(ref(rtdb, `users/${user.uid}/walletAddress`), lowerAddress);
       await set(ref(rtdb, `users/${user.uid}/isWalletBound`), true);
       await set(ref(rtdb, `wallets/${lowerAddress}`), { uid: user.uid, boundAt: Date.now() });
-    } catch (e) {
-      console.warn("[Auth] RTDB bindWallet warning:", (e as any)?.message);
+    } catch {
+      // RTDB non-critical
     }
 
     // 3. Firestore background sync
@@ -371,8 +366,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         expertise: updated.expertise,
         walletAddress: updated.walletAddress,
       });
-    } catch (e) {
-      console.warn("[Auth] RTDB updateProfile warning:", (e as any)?.message);
+    } catch {
+      // RTDB non-critical
     }
 
     try {

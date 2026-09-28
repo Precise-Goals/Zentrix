@@ -307,3 +307,13 @@ Zentrix/
 5. **Always run `bash scripts/gate.sh all`** before committing any changes. Ensure all sub-gates output `PASS`.
 6. **Support inquiries** are persisted to Firebase Realtime Database at path `contact_queries`. The desk can be monitored via the Firebase console.
 
+
+## Latest Update: End-to-End Escrow Flow & Production Readiness
+The platform has been fully integrated for a production-ready Web3 Escrow flow on the MST Testnet:
+1. **Proposal Locking**: Freelancers applying to a gig have their proposal locked in a 'Submitted' state, preventing duplicate submissions and allowing them to see that the client is reviewing their approach.
+2. **Client Acceptance & Work Started**: Clients review proposals inside the Gig detail modal. When accepted, the gig transitions to 'Active', the freelancer is assigned, and the milestone deliverables are automatically synced to the /dashboard.
+3. **Escrow Milestone Tracking**: The Dashboard.tsx actively listens to zx_milestones_updated events to instantly reflect active escrow schedules for both clients and freelancers.
+4. **Agent Rate Limits & Chat**: The Sarvam AI agent chat uses 
+eact-markdown to format responses, dynamically presents matching gigs as hyperlinked cards, and enforces rate limits strictly based on the user's minted ZentrixPass Tier (Free, Pro, Enterprise).
+5. **Onboarding & Routing**: Strict authenticated routing is enforced for /marketplace, /dashboard, and /agent. The onboarding flow mandates wallet connection via BridgeKey as the final binding step.
+6. **Support Routes**: A 'Support' dropdown is present in the Navbar with Contact Us, Legal Disclosures, and User Manual routing.

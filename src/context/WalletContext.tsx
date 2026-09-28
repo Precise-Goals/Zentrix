@@ -86,8 +86,8 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       const bal = await prov.getBalance(addr);
       setBalance(parseFloat(formatEther(bal)).toFixed(4));
-    } catch (e) {
-      console.error("Error fetching balance:", e);
+    } catch {
+      // balance fetch is non-critical
     }
   }, []);
 
@@ -123,12 +123,10 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           });
           setChainId(MST_TESTNET_CHAIN_ID);
           return true;
-        } catch (addError) {
-          console.error("Error adding MST Testnet:", addError);
+        } catch {
           return false;
         }
       }
-      console.error("Error switching to MST Testnet:", switchError);
       return false;
     }
   };
@@ -187,7 +185,6 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       scanNFTAssets(accountAddress, browserProvider);
       return accountAddress;
     } catch (error: any) {
-      console.error("Failed to connect wallet:", error);
       throw error;
     } finally {
       setIsConnecting(false);
@@ -207,9 +204,8 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const signMessage = async (message: string): Promise<string> => {
-    // Guard: no injected wallet available at all
-    const ethereum = getInjectedProvider();
-    if (!signer && !ethereum) {
+    const ethereum = getInjectedProvider(walletType || "bridgekey");
+    if (!ethereum) {
       const err = new Error(
         "No wallet extension detected. Please install BridgeKey from the Chrome Web Store and connect it to Zentrix."
       );
@@ -217,75 +213,137 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       throw err;
     }
 
-    if (!signer && !address) throw new Error("Wallet not connected");
+    let activeSigner = signer;
+    let activeAddress = address;
 
-    // Helper: detect BridgeKey's site-not-connected rejection
-    const isBridgeKeyNotConnected = (e: any) =>
-      e?.message?.toLowerCase().includes("not connected to bridgekey") ||
-      e?.message?.toLowerCase().includes("connect the site first");
+    // Helper: detect BridgeKey or EVM extension site-not-connected rejection
+    const isBridgeKeyNotConnected = (e: any) => {
+      const msg = (e?.message || "").toLowerCase();
+      return (
+        msg.includes("not connected") ||
+        msg.includes("connect the site first") ||
+        e?.code === 4100
+      );
+    };
 
-    if (signer && typeof signer.signMessage === "function") {
+    // If no active signer or address, prompt eth_requestAccounts to authorize the site with BridgeKey
+    if (!activeSigner || !activeAddress) {
       try {
-        return await signer.signMessage(message);
-      } catch (err: any) {
-        if (err?.code === 4001 || err?.message?.includes("rejected") || err?.message?.includes("User denied")) {
-          throw err;
+        const accounts: string[] = await ethereum.request({
+          method: "eth_requestAccounts",
+          params: [],
+        });
+        if (!accounts || accounts.length === 0) {
+          throw new Error("No accounts authorized in BridgeKey wallet.");
         }
+        activeAddress = accounts[0];
+        const freshProvider = new BrowserProvider(ethereum, "any");
+        activeSigner = await freshProvider.getSigner();
 
-        // BridgeKey throws "This site is not connected to BridgeKey. Connect the site first."
-        // → trigger eth_requestAccounts to open BridgeKey's connect popup, then retry
-        if (isBridgeKeyNotConnected(err) && ethereum?.request) {
-          try {
-            const accounts: string[] = await ethereum.request({ method: "eth_requestAccounts", params: [] });
-            if (accounts && accounts.length > 0) {
-              const freshProvider = new BrowserProvider(ethereum, "any");
-              const freshSigner = await freshProvider.getSigner();
-              // Update signer state for future calls
-              setSigner(freshSigner);
-              setProvider(freshProvider);
-              setAddress(accounts[0]);
-              return await freshSigner.signMessage(message);
-            }
-          } catch (reconnectErr: any) {
-            // User rejected the BridgeKey connect popup
-            if (reconnectErr?.code === 4001 || reconnectErr?.message?.includes("rejected") || reconnectErr?.message?.includes("User denied")) {
-              throw reconnectErr;
-            }
-            console.warn("[Wallet] BridgeKey reconnect failed:", reconnectErr);
-          }
+        setProvider(freshProvider);
+        setSigner(activeSigner);
+        setAddress(activeAddress);
+        setWalletType(walletType || "bridgekey");
+        localStorage.setItem("zx_connected_type", walletType || "bridgekey");
+        localStorage.setItem("zx_connected_address", activeAddress);
+        localStorage.setItem("zx_wallet_approved", "true");
+      } catch (authErr: any) {
+        if (
+          authErr?.code === 4001 ||
+          authErr?.message?.includes("rejected") ||
+          authErr?.message?.includes("User denied")
+        ) {
+          throw authErr;
         }
-
-        console.warn("[Wallet] signer.signMessage failed, attempting raw personal_sign fallback:", err);
+        throw new Error(
+          authErr?.message || "Please authorize Zentrix in your BridgeKey extension."
+        );
       }
     }
 
-    if (ethereum && ethereum.request && address) {
-      try {
-        return await ethereum.request({
-          method: "personal_sign",
-          params: [message, address],
-        });
-      } catch (err2: any) {
-        if (err2?.code === 4001 || err2?.message?.includes("rejected") || err2?.message?.includes("User denied")) {
-          throw err2;
-        }
-        // BridgeKey not connected at personal_sign level — try to reconnect first
-        if (isBridgeKeyNotConnected(err2)) {
-          const accounts: string[] = await ethereum.request({ method: "eth_requestAccounts", params: [] });
+    // Attempt 1: Standard ethers activeSigner.signMessage
+    try {
+      return await activeSigner.signMessage(message);
+    } catch (err: any) {
+      if (
+        err?.code === 4001 ||
+        err?.message?.includes("rejected") ||
+        err?.message?.includes("User denied")
+      ) {
+        throw err;
+      }
+
+      // If BridgeKey throws "This site is not connected to BridgeKey. Connect the site first.",
+      // explicitly authorize the site via eth_requestAccounts and retry signing
+      if (isBridgeKeyNotConnected(err) && ethereum?.request) {
+        try {
+          const accounts: string[] = await ethereum.request({
+            method: "eth_requestAccounts",
+            params: [],
+          });
           if (accounts && accounts.length > 0) {
-            return await ethereum.request({ method: "personal_sign", params: [message, accounts[0]] });
+            activeAddress = accounts[0];
+            const freshProvider = new BrowserProvider(ethereum, "any");
+            activeSigner = await freshProvider.getSigner();
+            setSigner(activeSigner);
+            setProvider(freshProvider);
+            setAddress(activeAddress);
+            return await activeSigner.signMessage(message);
+          }
+        } catch (reconnectErr: any) {
+          if (
+            reconnectErr?.code === 4001 ||
+            reconnectErr?.message?.includes("rejected") ||
+            reconnectErr?.message?.includes("User denied")
+          ) {
+            throw reconnectErr;
           }
         }
-        const hexMsg = "0x" + Array.from(new TextEncoder().encode(message)).map((b) => b.toString(16).padStart(2, "0")).join("");
-        return await ethereum.request({
-          method: "personal_sign",
-          params: [hexMsg, address],
-        });
       }
-    }
-    throw new Error("Signer does not support signMessage");
-  };
 
+      // Attempt 2: Direct EIP-1193 personal_sign RPC fallback with hex message
+      const hexMsg =
+        "0x" +
+        Array.from(new TextEncoder().encode(message))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+
+      if (ethereum && ethereum.request && activeAddress) {
+        try {
+          return await ethereum.request({
+            method: "personal_sign",
+            params: [hexMsg, activeAddress],
+          });
+        } catch (err2: any) {
+          if (
+            err2?.code === 4001 ||
+            err2?.message?.includes("rejected") ||
+            err2?.message?.includes("User denied")
+          ) {
+            throw err2;
+          }
+          // Some EIP-1193 providers expect [address, hexMsg]
+          try {
+            return await ethereum.request({
+              method: "personal_sign",
+              params: [activeAddress, hexMsg],
+            });
+          } catch (err3: any) {
+            if (
+              err3?.code === 4001 ||
+              err3?.message?.includes("rejected") ||
+              err3?.message?.includes("User denied")
+            ) {
+              throw err3;
+            }
+            throw err2;
+          }
+        }
+      }
+
+      throw err;
+    }
+  };
 
   // Robust silent auto-reconnect on mount / reload
   useEffect(() => {
@@ -320,12 +378,22 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             await updateBalance(accountAddress, browserProvider);
             localStorage.setItem("zx_connected_address", accountAddress);
             scanNFTAssets(accountAddress, browserProvider);
+          } else {
+            // Extension is present but origin is not authorized yet
+            setAddress(null);
+            setSigner(null);
+            setWalletType(null);
+            localStorage.removeItem("zx_wallet_approved");
+            localStorage.removeItem("zx_connected_address");
           }
-        } catch (err) {
-          console.warn("[Wallet] Silent reconnect notice:", err);
+        } catch {
+          setAddress(null);
+          setSigner(null);
         }
       } else if (attempts >= maxAttempts) {
         clearInterval(intervalId);
+        setAddress(null);
+        setSigner(null);
       }
     };
 
@@ -341,12 +409,18 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     const ethereum = getInjectedProvider();
     if (ethereum && ethereum.on) {
-      const handleAccountsChanged = (accounts: string[]) => {
-        if (accounts.length === 0) {
+      const handleAccountsChanged = async (accounts: string[]) => {
+        if (!accounts || accounts.length === 0) {
           disconnectWallet();
         } else {
           setAddress(accounts[0]);
-          if (provider) updateBalance(accounts[0], provider);
+          try {
+            const browserProvider = new BrowserProvider(ethereum, "any");
+            const activeSigner = await browserProvider.getSigner();
+            setSigner(activeSigner);
+            setProvider(browserProvider);
+            updateBalance(accounts[0], browserProvider);
+          } catch {}
         }
       };
 
@@ -365,7 +439,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [provider, updateBalance]);
 
-  const isConnected = !!address;
+  const isConnected = !!address && !!signer;
   const isCorrectNetwork = chainId === MST_TESTNET_CHAIN_ID;
 
   return (

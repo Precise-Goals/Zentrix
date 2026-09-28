@@ -12,7 +12,6 @@ export default function ThreeD() {
       const testCanvas = document.createElement('canvas');
       const gl = testCanvas.getContext('webgl') || testCanvas.getContext('experimental-webgl');
       if (!gl) {
-        console.warn('[ThreeD] WebGL not supported or disabled on this device.');
         return;
       }
     } catch {
@@ -22,11 +21,9 @@ export default function ThreeD() {
     let splineApp: Application | null = null;
     try {
       splineApp = new Application(canvasRef.current);
-      splineApp.load('/carex.splinecode').catch((err: any) => {
-        console.warn('Notice: Spline 3D asset optional or not loaded:', err?.message || err);
-      });
-    } catch (e: any) {
-      console.warn('[ThreeD] Spline runtime initialization warning:', e?.message || e);
+      splineApp.load('/carex.splinecode').catch(() => {});
+    } catch {
+      // Spline runtime initialization fallback
     }
 
     return () => {

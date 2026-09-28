@@ -84,8 +84,8 @@ export async function scanNFTAssets(
   try {
     const rawBal = await passContract.balanceOf(checksumAddress);
     passBalance = Number(rawBal);
-  } catch (err) {
-    console.warn("[NFT Scanner] passContract.balanceOf error:", err);
+  } catch {
+    // passContract.balanceOf fallback
   }
 
   // 2. Query getPass() & tierOf()
@@ -140,8 +140,7 @@ export async function scanNFTAssets(
       if (passTier === 0) {
         passTier = 1;
       }
-    } catch (eventErr) {
-      console.warn("[NFT Scanner] Event query notice:", eventErr);
+    } catch {
       if (passBalance > 0 && passTier === 0) {
         passTier = 1;
       }
@@ -162,8 +161,8 @@ export async function scanNFTAssets(
         .map((e: any) => e.args?.[2]?.toString())
         .filter(Boolean);
     }
-  } catch (err) {
-    console.warn("[NFT Scanner] repContract scan notice:", err);
+  } catch {
+    // repContract scan fallback
   }
 
   const result: NFTScanResult = {

@@ -462,7 +462,7 @@ export const DashboardPage: React.FC = () => {
             </div>
             <div className="flex items-baseline gap-2">
               <div className="text-3xl sm:text-4xl font-black">
-                {metrics.loading ? (
+                {(metrics.loading && !metrics.passTier) ? (
                   <Loader2 className="w-8 h-8 animate-spin inline" style={{ color: "var(--zx-primary)" }} />
                 ) : (
                   <span
@@ -474,7 +474,7 @@ export const DashboardPage: React.FC = () => {
                         : "text-[var(--zx-ink)]"
                     }
                   >
-                    {TIER_LABELS[metrics.passTier] || "Free"}
+                    {metrics.passTier === 2 ? "Enterprise" : metrics.passTier === 1 ? "PRO" : "Free"}
                   </span>
                 )}
               </div>
@@ -520,7 +520,7 @@ export const DashboardPage: React.FC = () => {
             }`}
           >
             <img
-              src={metrics.passTier === 2 ? "/2.gif" : "/1.gif"}
+              src={metrics.passTier === 2 ? "/2.gif" : metrics.passTier === 1 ? "/1.gif" : "/Robot.png"}
               alt={
                 metrics.passTier === 2
                   ? "Enterprise Pass NFT"
@@ -555,7 +555,7 @@ export const DashboardPage: React.FC = () => {
             Soulbound Credentials
           </div>
           <div className="text-4xl font-black" style={{ color: "var(--zx-ink)" }}>
-            {metrics.loading
+            {(metrics.loading && metrics.reputationTokenCount === 0 && !cachedNft.reputationCount)
               ? <Loader2 className="w-8 h-8 animate-spin inline" style={{ color: "var(--zx-primary)" }} />
               : metrics.reputationTokenCount
             }

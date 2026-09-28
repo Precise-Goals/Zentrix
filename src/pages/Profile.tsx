@@ -60,7 +60,7 @@ export const ProfilePage: React.FC = () => {
   const [editDesignation, setEditDesignation] = useState(profile?.designation || "");
   const [editBio, setEditBio] = useState(profile?.bio || "");
   const [editOrganization, setEditOrganization] = useState(profile?.organization || "");
-  const [editRole, setEditRole] = useState<"client" | "freelancer">(currentRole);
+  const [editRole, setEditRole] = useState<"client" | "freelancer">(currentRole || "freelancer");
   const [tagModalOpen, setTagModalOpen] = useState(false);
   const [profileFeedback, setProfileFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
 
@@ -73,7 +73,7 @@ export const ProfilePage: React.FC = () => {
       setEditBio(profile.bio || "");
       setEditOrganization(profile.organization || "");
     }
-    setEditRole(currentRole);
+    setEditRole(currentRole || "freelancer");
   }, [profile, currentRole]);
 
   const copyAddress = () => {
@@ -133,8 +133,7 @@ export const ProfilePage: React.FC = () => {
           await updateProfile({ avatar: compressedBase64 });
           setIsUploading(false);
         };
-      } catch (err) {
-        console.error("Failed to process image:", err);
+      } catch {
         setIsUploading(false);
       }
     };
@@ -214,7 +213,7 @@ export const ProfilePage: React.FC = () => {
 
           <button
             onClick={() => {
-              setEditRole(currentRole);
+              setEditRole(currentRole || "freelancer");
               setIsEditing(true);
             }}
             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white transition-all shadow-xs hover:opacity-95 cursor-pointer"

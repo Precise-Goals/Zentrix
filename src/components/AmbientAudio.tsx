@@ -54,9 +54,7 @@ export const AmbientAudio: React.FC = () => {
       audioRef.current.play().then(() => {
         setIsPlaying(true);
         localStorage.setItem("zx_ambient_audio", "true");
-      }).catch((err) => {
-        console.warn("Audio playback error:", err);
-      });
+      }).catch(() => {});
     }
   };
 

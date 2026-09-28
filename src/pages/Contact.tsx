@@ -21,7 +21,7 @@ export const ContactPage: React.FC = () => {
   const { address, isConnected } = useWallet();
   const { profile, currentRole, user } = useAuth();
 
-  const [name, setName] = useState(profile?.displayName || user?.displayName || "");
+  const [name, setName] = useState(profile?.name || user?.displayName || "");
   const [email, setEmail] = useState(user?.email || "");
   const [topic, setTopic] = useState("Escrow & Milestone");
   const [subject, setSubject] = useState("");
@@ -76,7 +76,6 @@ export const ContactPage: React.FC = () => {
       setMessage("");
       setSubject("");
     } catch (err: any) {
-      console.error("[Contact Form] Failed to save query to RTDB:", err);
       setErrorMsg(
         err?.message || "Failed to submit your query to Firebase Realtime Database. Please try again."
       );
