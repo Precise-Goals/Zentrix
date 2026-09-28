@@ -107,6 +107,26 @@ export const DashboardPage: React.FC = () => {
     } catch (_) {}
   }, [milestones]);
 
+  useEffect(() => {
+    const handleMilestonesUpdated = () => {
+      try {
+        const saved = localStorage.getItem("zx_dashboard_milestones");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+             setMilestones(parsed);
+          }
+        }
+      } catch (_) {}
+    };
+    window.addEventListener("zx_milestones_updated", handleMilestonesUpdated);
+    window.addEventListener("storage", handleMilestonesUpdated);
+    return () => {
+      window.removeEventListener("zx_milestones_updated", handleMilestonesUpdated);
+      window.removeEventListener("storage", handleMilestonesUpdated);
+    };
+  }, []);
+
   const [activeTab, setActiveTab] = useState<"overview" | "milestones" | "reputation">("overview");
   const [withdrawing, setWithdrawing] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -255,7 +275,6 @@ export const DashboardPage: React.FC = () => {
       setTxStatus("confirmed");
       await fetchMetrics(); // refresh after withdrawal
     } catch (err: any) {
-      console.error("Withdraw error:", err);
       setWithdrawFeedback({ type: "error", msg: err?.reason ?? err?.message ?? "Withdrawal transaction failed or was rejected." });
       setTxStatus(null);
     } finally {
