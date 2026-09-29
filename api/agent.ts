@@ -3,21 +3,32 @@ import { CORS_HEADERS } from "./_lib/shared";
 import { processAgentPipeline } from "./_lib/agentEngine";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method === "OPTIONS") {
-    return res.status(204).set(CORS_HEADERS).end();
-  }
-
+  // Always set CORS headers on every response
   Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
+
+  // Handle CORS preflight
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   try {
-    const result = await processAgentPipeline(req.body);
+    let payload = req.body;
+    if (typeof payload === "string") {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        payload = { prompt: payload };
+      }
+    }
+    const result = await processAgentPipeline(payload || {});
     return res.status(result.status).json(result.data);
   } catch (err: any) {
     console.error("[Agent API] Unhandled error:", err);
     return res.status(500).json({ error: err?.message || "Internal server error" });
   }
 }
+
