@@ -1,12 +1,8 @@
-// Auto-generated from contracts/deployments.json
-export const CHAIN_ID = 91562037;
-export const RPC_URL = "https://testnetrpc.mstblockchain.com";
-
 export const CONTRACT_ADDRESSES = {
-  ZentrixReputation: "0xB224Bd880326a5046F8526461d25fa5217636cA3",
-  ZentrixEscrow: "0xa50759E9CE985Fbb06503CaeC0DB9D1fB1233726",
-  ZentrixPass: "0xE33932ba495ff04b321a2c7E58C34b43A7Ff2e9b",
-} as const;
+  ZentrixReputation: '0x2a0f4cB2c514edde59762D685EE57D0678813935',
+  ZentrixEscrow: '0x8b6475a6C378625775Ca46447Fc52e483de896be',
+  ZentrixPass: '0x3EDad230dCFc6Dd3C357490b9feDa49639646BB7'
+};
 
 export const CONTRACT_ABIS = {
   ZentrixReputation: [
@@ -905,7 +901,7 @@ export const CONTRACT_ABIS = {
     "stateMutability": "nonpayable",
     "type": "function"
   }
-] as const,
+],
   ZentrixEscrow: [
   {
     "inputs": [
@@ -1665,7 +1661,7 @@ export const CONTRACT_ABIS = {
     ],
     "name": "assignAndFund",
     "outputs": [],
-    "stateMutability": "payable",
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1742,7 +1738,7 @@ export const CONTRACT_ABIS = {
         "type": "uint256"
       }
     ],
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "type": "function"
   },
   {
@@ -2289,7 +2285,7 @@ export const CONTRACT_ABIS = {
     "stateMutability": "view",
     "type": "function"
   }
-] as const,
+],
   ZentrixPass: [
   {
     "inputs": [],
@@ -3219,5 +3215,5 @@ export const CONTRACT_ABIS = {
     "stateMutability": "nonpayable",
     "type": "function"
   }
-] as const,
+]
 };

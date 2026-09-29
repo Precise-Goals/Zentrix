@@ -126,7 +126,7 @@ contract ZentrixEscrow is AccessControl, Pausable, ReentrancyGuard {
         string calldata metadataCID,
         MilestonePlan[] calldata plan,
         uint64 reviewWindow
-    ) external whenNotPaused returns (uint256 gigId) {
+    ) external payable whenNotPaused nonReentrant returns (uint256 gigId) {
         require(plan.length > 0, "ZentrixEscrow: plan must have milestones");
         require(reviewWindow >= 1 hours, "ZentrixEscrow: reviewWindow must be >= 1h");
 
@@ -147,6 +147,8 @@ contract ZentrixEscrow is AccessControl, Pausable, ReentrancyGuard {
             totalBudget += plan[i].amount;
         }
 
+        if (msg.value != totalBudget) revert IncorrectFundingAmount(totalBudget, msg.value);
+
         gigs[gigId] = Gig({
             id: gigId,
             client: msg.sender,
@@ -160,6 +162,8 @@ contract ZentrixEscrow is AccessControl, Pausable, ReentrancyGuard {
             milestoneCount: plan.length
         });
 
+        totalLockedMilestoneFunds += msg.value;
+
         emit GigCreated(gigId, msg.sender, reviewWindow, totalBudget);
     }
 
@@ -169,21 +173,12 @@ contract ZentrixEscrow is AccessControl, Pausable, ReentrancyGuard {
         address freelancer,
         bytes32 agreementHash,
         string calldata agreementCID
-    ) external payable whenNotPaused nonReentrant {
+    ) external whenNotPaused nonReentrant {
         Gig storage gig = gigs[gigId];
         if (gig.client == address(0)) revert GigNotFound();
         if (msg.sender != gig.client) revert NotGigClient();
         if (gig.status != GigStatus.Open) revert InvalidGigStatus(GigStatus.Open, gig.status);
         if (freelancer == address(0)) revert ZeroAddress();
-
-        uint256 totalRequired = 0;
-        for (uint256 i = 0; i < gig.milestoneCount; i++) {
-            totalRequired += milestones[gigId][i].amount;
-        }
-
-        if (msg.value != totalRequired) {
-            revert IncorrectFundingAmount(totalRequired, msg.value);
-        }
 
         gig.freelancer = freelancer;
         gig.status = GigStatus.Assigned;
@@ -191,9 +186,7 @@ contract ZentrixEscrow is AccessControl, Pausable, ReentrancyGuard {
         gig.agreementHash = agreementHash;
         gig.agreementCID = agreementCID;
 
-        totalLockedMilestoneFunds += msg.value;
-
-        emit Funded(gigId, msg.sender, freelancer, msg.value);
+        emit Funded(gigId, msg.sender, freelancer, 0);
         emit AgreementSigned(gigId, msg.sender, agreementHash);
     }
 
