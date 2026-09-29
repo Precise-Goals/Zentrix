@@ -148,14 +148,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await signInWithPopup(auth, googleProvider);
       return res.user;
     } catch (e: any) {
-      if (e?.code === "auth/popup-blocked" || e?.code === "auth/popup-closed-by-user") {
-        try {
-          await signInWithRedirect(auth, googleProvider);
-          return null;
-        } catch (redirectErr) {
-          throw redirectErr;
-        }
-      }
       throw e;
     }
   };
