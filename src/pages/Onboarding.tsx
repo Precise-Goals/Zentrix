@@ -164,8 +164,9 @@ export const OnboardingPage: React.FC = () => {
 
   // Step 5: Web3 Binding Handler
   const handleWalletBinding = async () => {
-    if (!address || !isConnected) {
+    if (!address || !isConnected || walletType !== "bridgekey") {
       try {
+        setStepError(null);
         await connectWallet("bridgekey");
       } catch (err: any) {
         setStepError(err.message || "Failed to connect BridgeKey. Please install and authorize the extension.");

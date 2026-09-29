@@ -1,23 +1,25 @@
-import React, { useState } from "react";
+import React, { lazy, Suspense, useState } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Navbar } from "./components/Navbar";
 import { SplashScreen } from "./components/SplashScreen";
-import { HomePage } from "./pages/Home";
-import { AboutPage } from "./pages/About";
-import { MarketplacePage } from "./pages/Marketplace";
-import { AgentPage } from "./pages/Agent";
-import { PricingPage } from "./pages/Pricing";
-import { DashboardPage } from "./pages/Dashboard";
-import { LoginPage } from "./pages/Login";
-import { OnboardingPage } from "./pages/Onboarding";
-import { ProfilePage } from "./pages/Profile";
-import { DisclosurePage } from "./pages/Disclosure";
-import { ContactPage } from "./pages/Contact";
-import { ManualPage } from "./pages/Manual";
 import { Footer } from "./components/Footer";
 import { CursorFollower } from "./components/CursorFollower";
 import { useAuth } from "./context/AuthContext";
 import { useWallet } from "./context/WalletContext";
+import { NetworkGuard } from "./components/NetworkGuard";
+
+const HomePage = lazy(() => import("./pages/Home").then(({ HomePage }) => ({ default: HomePage })));
+const AboutPage = lazy(() => import("./pages/About").then(({ AboutPage }) => ({ default: AboutPage })));
+const MarketplacePage = lazy(() => import("./pages/Marketplace").then(({ MarketplacePage }) => ({ default: MarketplacePage })));
+const AgentPage = lazy(() => import("./pages/Agent").then(({ AgentPage }) => ({ default: AgentPage })));
+const PricingPage = lazy(() => import("./pages/Pricing").then(({ PricingPage }) => ({ default: PricingPage })));
+const DashboardPage = lazy(() => import("./pages/Dashboard").then(({ DashboardPage }) => ({ default: DashboardPage })));
+const LoginPage = lazy(() => import("./pages/Login").then(({ LoginPage }) => ({ default: LoginPage })));
+const OnboardingPage = lazy(() => import("./pages/Onboarding").then(({ OnboardingPage }) => ({ default: OnboardingPage })));
+const ProfilePage = lazy(() => import("./pages/Profile").then(({ ProfilePage }) => ({ default: ProfilePage })));
+const DisclosurePage = lazy(() => import("./pages/Disclosure").then(({ DisclosurePage }) => ({ default: DisclosurePage })));
+const ContactPage = lazy(() => import("./pages/Contact").then(({ ContactPage }) => ({ default: ContactPage })));
+const ManualPage = lazy(() => import("./pages/Manual").then(({ ManualPage }) => ({ default: ManualPage })));
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -54,7 +56,7 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     return <Navigate to="/onboarding" replace state={{ from: location.pathname }} />;
   }
 
-  return <>{children}</>;
+  return <NetworkGuard>{children}</NetworkGuard>;
 };
 
 export const App: React.FC = () => {
@@ -70,7 +72,17 @@ export const App: React.FC = () => {
       <Navbar />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Routes>
+        <Suspense
+          fallback={
+            <div className="flex min-h-[50vh] items-center justify-center">
+              <div
+                className="h-8 w-8 animate-spin rounded-full border-2 border-t-transparent"
+                style={{ borderColor: "var(--zx-primary)", borderTopColor: "transparent" }}
+              />
+            </div>
+          }
+        >
+          <Routes>
           {/* Public Routes */}
           <Route path="/" element={<HomePage />} />
           <Route path="/about" element={<AboutPage />} />
@@ -114,7 +126,8 @@ export const App: React.FC = () => {
               </ProtectedRoute>
             }
           />
-        </Routes>
+          </Routes>
+        </Suspense>
       </main>
 
       <Footer />

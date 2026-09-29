@@ -80,15 +80,30 @@ export const DashboardPage: React.FC = () => {
   const { currentRole } = useAuth();
   const { address, signer, provider, isConnected, connectWallet, openConnectModal } = useWallet();
 
-  const cachedNft = getCachedNFTAssets(address);
-  const [metrics, setMetrics] = useState<OnChainMetrics>({
-    withdrawable: "0",
-    passTokenId: cachedNft.passTokenId ? Number(cachedNft.passTokenId) : null,
-    passTier: cachedNft.passTier ?? 0,
-    reputationTokenCount: cachedNft.reputationCount,
-    loading: false,
-    error: null,
+  const [metrics, setMetrics] = useState<OnChainMetrics>(() => {
+    const cachedNft = getCachedNFTAssets(address);
+    return {
+      withdrawable: "0",
+      passTokenId: cachedNft.passTokenId ? Number(cachedNft.passTokenId) : null,
+      passTier: cachedNft.passTier ?? 0,
+      reputationTokenCount: cachedNft.reputationCount ?? 0,
+      loading: false,
+      error: null,
+    };
   });
+
+  // Hydrate immediately when address becomes available/changes
+  useEffect(() => {
+    if (address) {
+      const cache = getCachedNFTAssets(address);
+      setMetrics(prev => ({
+        ...prev,
+        passTokenId: cache.passTokenId ? Number(cache.passTokenId) : prev.passTokenId,
+        passTier: cache.passTier || prev.passTier,
+        reputationTokenCount: cache.reputationCount || prev.reputationTokenCount,
+      }));
+    }
+  }, [address]);
 
   const [milestones, setMilestones] = useState<DashboardMilestone[]>(() => {
     try {
@@ -204,23 +219,72 @@ export const DashboardPage: React.FC = () => {
     }
   };
 
+  const [submissionCid, setSubmissionCid] = useState("");
+
+  const submitRealMilestone = async (gigId: string, milestoneIndex: number, cid: string) => {
+    setMilestoneNotice(null);
+    try {
+      if (!signer) throw new Error("Wallet not connected");
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      const onChainGigId = parseInt(gigId) || 1;
+      const tx = await escrow.submitMilestone(onChainGigId, milestoneIndex, cid);
+      setMilestoneNotice({ type: "info", message: "Transaction pending..." });
+      await tx.wait();
+      await update(ref(rtdb, `gigs/${gigId}/milestones/${milestoneIndex}`), { status: 'review', cid });
+      setMilestoneNotice({ type: "success", message: "Work submitted successfully!" });
+      setSubmissionCid("");
+    } catch(err: any) {
+      setMilestoneNotice({ type: "error", message: err.message || "Transaction failed" });
+    }
+  };
+
+  const approveRealMilestone = async (gigId: string, milestoneIndex: number, milestonesCount: number) => {
+    setMilestoneNotice(null);
+    try {
+      if (!signer) throw new Error("Wallet not connected");
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      const onChainGigId = parseInt(gigId) || 1;
+      const tx = await escrow.approveMilestone(onChainGigId, milestoneIndex, 5);
+      setMilestoneNotice({ type: "info", message: "Transaction pending..." });
+      await tx.wait();
+
+      await update(ref(rtdb, `gigs/${gigId}/milestones/${milestoneIndex}`), { status: 'approved' });
+
+      // If all milestones are approved, set gig to Completed. (Here checking if it's the last one for simplicity)
+      if (milestoneIndex === milestonesCount - 1) {
+         await update(ref(rtdb, `gigs/${gigId}`), { status: 'Completed' });
+      }
+      setMilestoneNotice({ type: "success", message: "Work approved & Funds Released!" });
+    } catch (err: any) {
+      setMilestoneNotice({ type: "error", message: err.message || "Transaction failed" });
+    }
+  };
+
   // Find active milestone for Overview card
   const activeMilestone =
     milestones.find((m) => m.status !== "approved") || milestones[milestones.length - 1];
 
+  const [activeGigs, setActiveGigs] = useState<any[]>([]);
+
   useEffect(() => {
-    if (activeTab === "proposals" && address && currentRole === "client") {
-      const gigsRef = ref(rtdb, 'gigs');
-      const unsubscribe = onValue(gigsRef, (snapshot) => {
-        if (snapshot.exists()) {
-          const data = snapshot.val();
-          const myGigs = Object.values(data).filter((g: any) => g.client?.toLowerCase() === address.toLowerCase());
+    if (!address) return;
+    const gigsRef = ref(rtdb, 'gigs');
+    const unsubscribe = onValue(gigsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const allGigs: any[] = Object.values(data);
+
+        if (currentRole === "client") {
+          const myGigs = allGigs.filter((g) => g.client?.toLowerCase() === address.toLowerCase());
           setClientGigs(myGigs);
+          setActiveGigs(myGigs.filter(g => g.status === 'Assigned' || g.status === 'Active' || g.status === 'Completed'));
+        } else {
+          setActiveGigs(allGigs.filter(g => g.freelancer?.toLowerCase() === address.toLowerCase() && (g.status === 'Assigned' || g.status === 'Active' || g.status === 'Completed')));
         }
-      });
-      return () => unsubscribe();
-    }
-  }, [activeTab, address, currentRole]);
+      }
+    });
+    return () => unsubscribe();
+  }, [address, currentRole]);
 
   const handleAssign = async (gigId: string, freelancerAddress: string) => {
     if (!signer) return;
@@ -337,7 +401,7 @@ export const DashboardPage: React.FC = () => {
   };
 
   // ── Not connected guard ──────────────────────────────────────────
-  if (!isConnected) {
+  if (!address && !isConnected) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] gap-6 text-center">
         <div className="w-16 h-16 rounded-3xl flex items-center justify-center"
@@ -609,7 +673,7 @@ export const DashboardPage: React.FC = () => {
             Soulbound Credentials
           </div>
           <div className="text-4xl font-black" style={{ color: "var(--zx-ink)" }}>
-            {(metrics.loading && metrics.reputationTokenCount === 0 && !cachedNft.reputationCount)
+            {(metrics.loading && metrics.reputationTokenCount === 0)
               ? <Loader2 className="w-8 h-8 animate-spin inline" style={{ color: "var(--zx-primary)" }} />
               : metrics.reputationTokenCount
             }
@@ -795,7 +859,70 @@ export const DashboardPage: React.FC = () => {
 
           {/* Milestones tab */}
           {activeTab === "milestones" && (
-            <div className="space-y-3">
+            <div className="space-y-6">
+              {activeGigs.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-bold" style={{ color: "var(--zx-ink)" }}>Active Workrooms</h3>
+                  {activeGigs.map(gig => (
+                    <div key={gig.id} className="p-4 rounded-2xl" style={{ background: "var(--zx-surface-alt)", border: "1px solid var(--zx-border)" }}>
+                      <h4 className="font-bold text-md mb-2">{gig.title}</h4>
+                      <p className="text-xs text-gray-500 mb-4">{gig.description}</p>
+
+                      <div className="space-y-3">
+                        {gig.milestones && gig.milestones.map((m: any, idx: number) => (
+                          <div key={idx} className="p-3 bg-white rounded-xl border flex flex-col md:flex-row justify-between gap-3 items-center">
+                            <div>
+                              <span className="font-bold text-sm">Milestone {idx + 1}: {m.name}</span>
+                              <div className="text-xs text-gray-500">Escrow: {m.escrowAmount} tMSTC | Status: {m.status || "pending"}</div>
+                            </div>
+
+                            <div className="flex flex-col gap-2 w-full md:w-auto">
+                              {currentRole === "freelancer" && (!m.status || m.status === "pending") && (
+                                <div className="flex gap-2 w-full">
+                                  <input
+                                    type="text"
+                                    placeholder="IPFS CID..."
+                                    value={submissionCid}
+                                    onChange={(e) => setSubmissionCid(e.target.value)}
+                                    className="px-3 py-1.5 text-xs rounded border w-full"
+                                  />
+                                  <button
+                                    onClick={() => submitRealMilestone(gig.id, idx, submissionCid)}
+                                    className="px-4 py-1.5 rounded-lg text-white text-xs font-bold whitespace-nowrap"
+                                    style={{ background: "var(--zx-primary-deep)" }}
+                                  >
+                                    Submit Work
+                                  </button>
+                                </div>
+                              )}
+                              {currentRole === "client" && m.status === "review" && (
+                                <div className="flex items-center gap-2">
+                                  <a href={`https://ipfs.io/ipfs/${m.cid}`} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">View Work ({m.cid?.slice(0,6)}...)</a>
+                                  <button
+                                    onClick={() => approveRealMilestone(gig.id, idx, gig.milestones.length)}
+                                    className="px-4 py-1.5 rounded-lg text-white text-xs font-bold"
+                                    style={{ background: "var(--zx-success)" }}
+                                  >
+                                    Approve & Release Funds
+                                  </button>
+                                </div>
+                              )}
+                              {m.status === "approved" && (
+                                <span className="text-xs font-bold text-green-700">Approved</span>
+                              )}
+                              {m.status === "review" && currentRole === "freelancer" && (
+                                <span className="text-xs font-bold text-orange-600">Pending Client Review</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1">
                 <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
                   Milestone-gated escrow lifecycle. Freelancers submit deliverables; Mentors/Clients approve.
@@ -918,6 +1045,7 @@ export const DashboardPage: React.FC = () => {
                   </div>
                 </div>
               ))}
+            </div>
             </div>
           )}
 

@@ -38,7 +38,7 @@ export const Footer: React.FC = () => {
               />
             </div>
             <p className="text-xs text-[var(--zx-muted)] leading-relaxed max-w-sm">
-              Non-custodial milestone escrow marketplace on MST Blockchain Testnet. Sarvam-105B AI talent matching, Pass NFT credits, and soulbound reputation credentials.
+              Non-custodial milestone escrow marketplace on MST Blockchain Testnet. Sarvam-30B AI talent matching, Pass NFT credits, and soulbound reputation credentials.
             </p>
             <div className="flex items-center gap-2 pt-1">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">

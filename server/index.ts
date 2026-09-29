@@ -241,9 +241,9 @@ const server = Bun.serve({
 - Always provide clear, actionable summaries and explain why each recommendation matches their criteria.
 - Never output personal contact information (no raw emails or phone numbers). Everything is negotiated through Zentrix escrow.`;
 
-        // Sarvam Chat API Request with active sarvam-105b model
+        // Sarvam Chat API request using the production-supported model.
         const sarvamPayload: any = {
-          model: "sarvam-105b",
+          model: "sarvam-30b",
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt },
@@ -287,7 +287,7 @@ const server = Bun.serve({
             toolResult = VERIFIED_FREELANCERS;
           }
 
-          // Follow-up completion turn with active sarvam-105b
+          // Follow-up completion turn with the same production model.
           const followUpRes = await fetch("https://api.sarvam.ai/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -295,7 +295,7 @@ const server = Bun.serve({
               "api-subscription-key": apiKey,
             },
             body: JSON.stringify({
-              model: "sarvam-105b",
+              model: "sarvam-30b",
               messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: prompt },

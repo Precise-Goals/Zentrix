@@ -4,7 +4,7 @@
 export const deployments = {
   "testnet": {
     "ZentrixReputation": {
-      "address": "0xbF3cB5e2163b0e6df4825EDb5a16d81f7c6D8502",
+      "address": "0x2a0f4cB2c514edde59762D685EE57D0678813935",
       "abi": [
         {
           "inputs": [],
@@ -905,7 +905,7 @@ export const deployments = {
       "constructorArguments": []
     },
     "ZentrixEscrow": {
-      "address": "0x5d349C7C35408a87dc113e8438113e057e306165",
+      "address": "0x8b6475a6C378625775Ca46447Fc52e483de896be",
       "abi": [
         {
           "inputs": [
@@ -1665,7 +1665,7 @@ export const deployments = {
           ],
           "name": "assignAndFund",
           "outputs": [],
-          "stateMutability": "payable",
+          "stateMutability": "nonpayable",
           "type": "function"
         },
         {
@@ -1742,7 +1742,7 @@ export const deployments = {
               "type": "uint256"
             }
           ],
-          "stateMutability": "nonpayable",
+          "stateMutability": "payable",
           "type": "function"
         },
         {
@@ -2292,11 +2292,11 @@ export const deployments = {
       ],
       "constructorArguments": [
         "0x73595081334A18D4298A160b162faB4Fb4B3c85B",
-        "0xbF3cB5e2163b0e6df4825EDb5a16d81f7c6D8502"
+        "0x2a0f4cB2c514edde59762D685EE57D0678813935"
       ]
     },
     "ZentrixPass": {
-      "address": "0x3106772B6F7481ec7B71776B78268D16aD9952D3",
+      "address": "0x3EDad230dCFc6Dd3C357490b9feDa49639646BB7",
       "abi": [
         {
           "inputs": [],

@@ -429,26 +429,12 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         window.location.reload();
       };
 
-      const handleNftScanned = (e: any) => {
-        if (e.detail) {
-          setPassTier(e.detail.passTier);
-          setPassTokenId(e.detail.passTokenId);
-          setReputationScore(e.detail.reputationCount * 10);
-        }
-      };
-
       ethereum.on("accountsChanged", handleAccountsChanged);
       ethereum.on("chainChanged", handleChainChanged);
-      if (typeof window !== "undefined") {
-        window.addEventListener("zx_nft_scanned", handleNftScanned);
-      }
 
       return () => {
         ethereum.removeListener("accountsChanged", handleAccountsChanged);
         ethereum.removeListener("chainChanged", handleChainChanged);
-        if (typeof window !== "undefined") {
-          window.removeEventListener("zx_nft_scanned", handleNftScanned);
-        }
       };
     }
   }, [provider, updateBalance]);

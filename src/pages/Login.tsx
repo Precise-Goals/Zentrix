@@ -20,10 +20,11 @@ import { motion } from "framer-motion";
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, profile, loginWithGoogle, loginWithEmail, registerWithEmail } = useAuth();
+  const { user, profile, loading: authLoading, loginWithGoogle, loginWithEmail, registerWithEmail } = useAuth();
   let from = (location.state as any)?.from || "/dashboard"; if (from === "/login" || from === "/onboarding") from = "/dashboard";
 
   useEffect(() => {
+    if (authLoading) return;
     if (user) {
       if (!profile?.isOnboarded) {
         navigate("/onboarding", { replace: true, state: { from } });
@@ -31,7 +32,7 @@ export const LoginPage: React.FC = () => {
         navigate(from, { replace: true });
       }
     }
-  }, [user, profile, navigate, from]);
+  }, [authLoading, user, profile, navigate, from]);
 
   const [isRegister, setIsRegister] = useState(false);
   const [email, setEmail] = useState("");

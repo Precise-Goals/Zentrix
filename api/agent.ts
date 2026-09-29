@@ -12,6 +12,36 @@ import {
 // This is acceptable for hackathon/demo use — spike task: ZENTRIX-RATE-PERSIST
 const usageStore = new Map<string, number>();
 
+const AGENT_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "search_gigs",
+      description: "Search open freelance gigs and project milestones available on Zentrix marketplace.",
+      parameters: {
+        type: "object",
+        properties: {
+          tag: { type: "string", description: "Filter by industry tag or category" },
+          minBudget: { type: "number", description: "Minimum budget in tMSTC" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_freelancers",
+      description: "Search verified freelance talent profiles on Zentrix.",
+      parameters: {
+        type: "object",
+        properties: {
+          skill: { type: "string", description: "Technology or expertise" },
+        },
+      },
+    },
+  },
+];
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -74,11 +104,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Sarvam Chat API Request
     const sarvamPayload: any = {
-      model: "sarvam-105b",
+      model: "sarvam-30b",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: prompt },
       ],
+      tools: AGENT_TOOLS,
+      tool_choice: "auto",
       temperature: 0.3,
     };
 
@@ -162,7 +194,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           "api-subscription-key": apiKey,
         },
         body: JSON.stringify({
-          model: "sarvam-105b",
+          model: "sarvam-30b",
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt },
@@ -174,6 +206,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               content: JSON.stringify(toolResult),
             },
           ],
+          tools: AGENT_TOOLS,
           temperature: 0.3,
         }),
       });

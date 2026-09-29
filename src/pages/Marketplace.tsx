@@ -311,17 +311,16 @@ export const MarketplacePage: React.FC = () => {
       return;
     }
 
-    const total = newMilestones.reduce((acc, m) => acc + parseFloat(m.amount || "0"), 0).toFixed(1);
-
     try {
       setIsLoadingTransaction(true);
       const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
-      const totalBudgetWei = ethers.parseEther(total);
       const plan = newMilestones.map(m => ({
         amount: ethers.parseEther(m.amount),
         deadline: 0,
         criteriaHash: ethers.ZeroHash
       }));
+      const totalBudgetWei = plan.reduce((totalAmount, milestone) => totalAmount + milestone.amount, 0n);
+      const total = ethers.formatEther(totalBudgetWei);
       
       const tx = await escrow.createGig("QmMocked", plan, 72 * 3600, { value: totalBudgetWei });
       const receipt = await tx.wait();

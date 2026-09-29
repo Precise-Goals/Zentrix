@@ -46,7 +46,7 @@ describe("ZentrixEscrow & ZentrixReputation", function () {
         },
       ];
 
-      await expect(escrow.connect(client).createGig("ipfs://meta-1", plan, REVIEW_WINDOW))
+      await expect(escrow.connect(client).createGig("ipfs://meta-1", plan, REVIEW_WINDOW, { value: ethers.parseEther("3.0") }))
         .to.emit(escrow, "GigCreated")
         .withArgs(1, client.address, REVIEW_WINDOW, ethers.parseEther("3.0"));
 
@@ -65,16 +65,8 @@ describe("ZentrixEscrow & ZentrixReputation", function () {
         },
       ];
 
-      await escrow.connect(client).createGig("ipfs://meta-1", plan, REVIEW_WINDOW);
-
       await expect(
-        escrow.connect(client).assignAndFund(
-          1,
-          freelancer.address,
-          ethers.keccak256(ethers.toUtf8Bytes("Agreement Doc")),
-          "ipfs://agreement-1",
-          { value: ethers.parseEther("0.5") }
-        )
+        escrow.connect(client).createGig("ipfs://meta-1", plan, REVIEW_WINDOW, { value: ethers.parseEther("0.5") })
       ).to.be.revertedWithCustomError(escrow, "IncorrectFundingAmount");
     });
   });
@@ -88,13 +80,12 @@ describe("ZentrixEscrow & ZentrixReputation", function () {
           criteriaHash: ethers.keccak256(ethers.toUtf8Bytes("Criteria 1")),
         },
       ];
-      await escrow.connect(client).createGig("ipfs://meta", plan, REVIEW_WINDOW);
+      await escrow.connect(client).createGig("ipfs://meta", plan, REVIEW_WINDOW, { value: ethers.parseEther("1.0") });
       await escrow.connect(client).assignAndFund(
         1,
         freelancer.address,
         ethers.keccak256(ethers.toUtf8Bytes("doc")),
-        "ipfs://agree",
-        { value: ethers.parseEther("1.0") }
+        "ipfs://agree"
       );
     });
 
@@ -153,13 +144,12 @@ describe("ZentrixEscrow & ZentrixReputation", function () {
           criteriaHash: ethers.keccak256(ethers.toUtf8Bytes("Criteria M1")),
         },
       ];
-      await escrow.connect(client).createGig("ipfs://meta", plan, REVIEW_WINDOW);
+      await escrow.connect(client).createGig("ipfs://meta", plan, REVIEW_WINDOW, { value: ethers.parseEther("2.0") });
       await escrow.connect(client).assignAndFund(
         1,
         freelancer.address,
         ethers.keccak256(ethers.toUtf8Bytes("doc")),
-        "ipfs://agree",
-        { value: ethers.parseEther("2.0") }
+        "ipfs://agree"
       );
       await escrow.connect(freelancer).acceptAssignment(1);
       await escrow.connect(freelancer).submitMilestone(1, 0, "ipfs://evidence");
@@ -213,13 +203,12 @@ describe("ZentrixEscrow & ZentrixReputation", function () {
           criteriaHash: ethers.keccak256(ethers.toUtf8Bytes("Criteria M1")),
         },
       ];
-      await escrow.connect(client).createGig("ipfs://meta", plan, REVIEW_WINDOW);
+      await escrow.connect(client).createGig("ipfs://meta", plan, REVIEW_WINDOW, { value: ethers.parseEther("1.0") });
       await escrow.connect(client).assignAndFund(
         1,
         freelancer.address,
         ethers.keccak256(ethers.toUtf8Bytes("doc")),
-        "ipfs://agree",
-        { value: ethers.parseEther("1.0") }
+        "ipfs://agree"
       );
       await escrow.connect(freelancer).acceptAssignment(1);
 
