@@ -5,6 +5,8 @@ import { useWallet } from "../context/WalletContext";
 import { ethers } from "ethers";
 import { CONTRACT_ADDRESSES, CONTRACT_ABIS } from "../contracts";
 import { FREELANCE_CATEGORIES, ALL_FREELANCE_TAGS } from "../lib/tags";
+import { rtdb } from "../lib/firebase";
+import { ref, onValue, set, get, update } from "firebase/database";
 import { EscrowFlowInfographic } from "../components/EscrowFlowInfographic";
 import {
   Layers,
@@ -231,22 +233,34 @@ export const MarketplacePage: React.FC = () => {
   const { address, isConnected, openConnectModal, signer } = useWallet();
   const [isLoadingTransaction, setIsLoadingTransaction] = useState(false);
 
-  const [gigs, setGigs] = useState<GigItem[]>(() => {
-    try {
-      const saved = localStorage.getItem("zx_marketplace_gigs");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (_) {}
-    return INITIAL_GIGS;
-  });
+  const [gigs, setGigs] = useState<GigItem[]>([]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem("zx_marketplace_gigs", JSON.stringify(gigs));
-    } catch (_) {}
-  }, [gigs]);
+    const gigsRef = ref(rtdb, 'gigs');
+    const unsubscribe = onValue(gigsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        // Convert to array and merge proposals if they exist as an object
+        const loadedGigs = Object.values(data).map((g: any) => {
+          if (g.proposals && !Array.isArray(g.proposals)) {
+             g.proposals = Object.values(g.proposals);
+          }
+          return g;
+        }) as GigItem[];
+        // Sort by id descending
+        loadedGigs.sort((a, b) => {
+           const idA = parseInt(a.id);
+           const idB = parseInt(b.id);
+           if (!isNaN(idA) && !isNaN(idB)) return idB - idA;
+           return a.id.localeCompare(b.id);
+        });
+        setGigs(loadedGigs);
+      } else {
+        setGigs(INITIAL_GIGS);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [selectedTag, setSelectedTag] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -310,10 +324,24 @@ export const MarketplacePage: React.FC = () => {
       }));
       
       const tx = await escrow.createGig("QmMocked", plan, 72 * 3600, { value: totalBudgetWei });
-      await tx.wait();
+      const receipt = await tx.wait();
+      
+      let onChainGigId = Date.now().toString();
+      try {
+        if (receipt.logs) {
+           for (const log of receipt.logs) {
+              try {
+                const parsed = escrow.interface.parseLog({ topics: [...log.topics], data: log.data });
+                if (parsed?.name === "GigCreated") {
+                   onChainGigId = parsed.args[0].toString();
+                }
+              } catch (e) {}
+           }
+        }
+      } catch(e) {}
 
       const created: GigItem = {
-        id: (gigs.length + 1).toString(),
+        id: onChainGigId,
         title: newTitle,
         description: newDesc,
         client: address,
@@ -326,7 +354,7 @@ export const MarketplacePage: React.FC = () => {
         milestones: newMilestones,
       };
 
-      setGigs([created, ...gigs]);
+      await set(ref(rtdb, `gigs/${onChainGigId}`), created);
       setIsCreateModalOpen(false);
       setNewTitle("");
       setNewDesc("");
@@ -376,20 +404,8 @@ export const MarketplacePage: React.FC = () => {
       status: "Submitted",
     };
 
-    const updatedGigs = gigs.map((g) => {
-      if (g.id === activeGig.id) {
-        const existingProposals = g.proposals || [];
-        const filtered = existingProposals.filter((p) => p.freelancerAddress.toLowerCase() !== address.toLowerCase());
-        return {
-          ...g,
-          status: g.status === "Active" ? g.status : ("Submitted" as const),
-          proposals: [...filtered, newProposal],
-        };
-      }
-      return g;
-    });
-
-    setGigs(updatedGigs);
+    set(ref(rtdb, `gigs/${activeGig.id}/proposals/${address}`), newProposal);
+    update(ref(rtdb, `gigs/${activeGig.id}`), { status: activeGig.status === "Active" ? activeGig.status : "Submitted" });
     setIsApplyModalOpen(false);
     setApplyProposal("");
     setActiveGig(null);
@@ -729,6 +745,10 @@ export const MarketplacePage: React.FC = () => {
                     <span>Work Started</span>
                     <ArrowRight className="w-3 h-3" />
                   </Link>
+                ) : isOwner ? (
+                  <button disabled className="btn-secondary text-xs py-1.5 px-4 shadow-xs opacity-50 cursor-not-allowed">
+                    Your Gig
+                  </button>
                 ) : isApplicant ? (
                   <button disabled className="btn-secondary text-xs py-1.5 px-3 opacity-80 cursor-not-allowed flex items-center gap-1 font-bold" title="Application is locked as Submitted.">
                     <Lock className="w-3 h-3" />

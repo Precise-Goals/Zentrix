@@ -34,7 +34,7 @@ export const OnboardingPage: React.FC = () => {
   const location = useLocation();
   let from = (location.state as any)?.from || "/dashboard"; if (from === "/login" || from === "/onboarding") from = "/dashboard";
   const { user, profile, saveOnboarding, loading } = useAuth();
-  const { address, isConnected, isCorrectNetwork, switchNetwork, openConnectModal, signMessage, connectWallet } = useWallet();
+  const { address, isConnected, isCorrectNetwork, switchNetwork, openConnectModal, signMessage, connectWallet, walletType } = useWallet();
 
   // Discord Sequential Pop-up Steps (1 to 5)
   // Step 1: Choose Realm / Role
@@ -887,6 +887,12 @@ export const OnboardingPage: React.FC = () => {
                     <span>Successfully verified! Redirecting to your destination...</span>
                   </div>
                 )}
+                {isConnected && walletType !== "bridgekey" && (
+                  <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-mono flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600" />
+                    <span>STRICT REQUIREMENT: You MUST connect via BridgeKey extension. Other wallets are not permitted.</span>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -933,10 +939,10 @@ export const OnboardingPage: React.FC = () => {
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                     <span>Anchoring to MST...</span>
                   </>
-                ) : !isConnected ? (
+                ) : !isConnected || walletType !== "bridgekey" ? (
                   <>
                     <Wallet className="w-4 h-4" />
-                    <span>Connect MST Wallet</span>
+                    <span>Connect BridgeKey Wallet</span>
                   </>
                 ) : (
                   <>
