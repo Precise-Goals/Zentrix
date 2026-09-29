@@ -105,30 +105,57 @@ async function getRankedGigs(tags: string[], minBudget?: number) {
     const res = await fetch(`${FB_BASE}/gigs.json`, { signal: ctrl.signal });
     clearTimeout(t);
     const data = await res.json();
-    const raw: any[] = Object.values(data || {});
+    const raw: any[] = Object.values(data || {}).filter(Boolean);
     const pool = raw.length > 0 ? raw : VERIFIED_GIGS;
-    const scored = pool.map((g: any) => {
-      if (minBudget !== undefined) {
-        const bv = parseFloat(String(g.totalBudget || g.budget || "0").replace(/[^\d.]/g, ""));
-        if (!isNaN(bv) && bv < minBudget) return { score: -1, gig: null };
-      }
-      return {
-        score: scoreGig(g, tags),
-        gig: {
-          id: String(g.id || Math.random()),
-          title: g.title,
-          budget: String(g.totalBudget ?? g.budget ?? "1.0").includes("tMSTC") ? String(g.totalBudget ?? g.budget) : `${g.totalBudget ?? g.budget} tMSTC`,
-          escrowPercent: "100%",
-          tags: g.technologies || g.tags || [g.category || "Web3"],
-          reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
-          description: g.description,
-          clientAddress: g.client || g.clientAddress,
-          status: g.status || "Open",
-        },
-      };
-    }).filter(({ score }) => score > 0 || !tags.length).sort((a, b) => b.score - a.score).map(({ gig }) => gig);
-    return scored.length > 0 ? scored : VERIFIED_GIGS;
-  } catch { return VERIFIED_GIGS; }
+    const scored = pool
+      .map((g: any) => {
+        if (!g) return { score: -1, gig: null };
+        if (minBudget !== undefined) {
+          const bv = parseFloat(String(g.totalBudget || g.budget || "0").replace(/[^\d.]/g, ""));
+          if (!isNaN(bv) && bv < minBudget) return { score: -1, gig: null };
+        }
+        return {
+          score: scoreGig(g, tags),
+          gig: {
+            id: String(g.id || Math.random()),
+            title: g.title,
+            budget: String(g.totalBudget ?? g.budget ?? "1.0").includes("tMSTC")
+              ? String(g.totalBudget ?? g.budget)
+              : `${g.totalBudget ?? g.budget} tMSTC`,
+            escrowPercent: "100%",
+            tags: g.technologies || g.tags || [g.category || "Web3"],
+            reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
+            description: g.description,
+            clientAddress: g.client || g.clientAddress,
+            status: g.status || "Open",
+          },
+        };
+      })
+      .filter(({ score, gig }) => gig && (score > 0 || !tags.length))
+      .sort((a, b) => b.score - a.score)
+      .map(({ gig }) => gig);
+
+    if (scored.length > 0) return scored;
+    if (raw.length > 0) {
+      return raw.map((g: any) => ({
+        id: String(g.id || Math.random()),
+        title: g.title,
+        budget: String(g.totalBudget ?? g.budget ?? "1.0").includes("tMSTC")
+          ? String(g.totalBudget ?? g.budget)
+          : `${g.totalBudget ?? g.budget} tMSTC`,
+        escrowPercent: "100%",
+        tags: g.technologies || g.tags || [g.category || "Web3"],
+        reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
+        description: g.description,
+        clientAddress: g.client || g.clientAddress,
+        status: g.status || "Open",
+      }));
+    }
+    return VERIFIED_GIGS;
+  } catch (err) {
+    console.error("[agent] getRankedGigs error:", err);
+    return VERIFIED_GIGS;
+  }
 }
 
 async function getRankedFreelancers(skills: string[]) {
@@ -138,11 +165,33 @@ async function getRankedFreelancers(skills: string[]) {
     const res = await fetch(`${FB_BASE}/users.json`, { signal: ctrl.signal });
     clearTimeout(t);
     const data = await res.json();
-    const raw: any[] = Object.values(data || {}).filter((u: any) => u.role === "freelancer");
+    const raw: any[] = Object.values(data || {}).filter((u: any) => u && u.role === "freelancer");
     const pool = raw.length > 0 ? raw : VERIFIED_FREELANCERS;
-    const scored = pool.map((u: any) => ({
-      score: scoreFreelancer(u, skills),
-      freelancer: {
+    const scored = pool
+      .map((u: any) => {
+        if (!u) return { score: -1, freelancer: null };
+        return {
+          score: scoreFreelancer(u, skills),
+          freelancer: {
+            id: u.uid || u.id || u.walletAddress,
+            name: u.name || "Freelancer",
+            handle: "@" + (u.name || "talent").replace(/\s+/g, "").toLowerCase(),
+            designation: u.skills?.join(", ") || u.designation || "Web3 Developer",
+            skills: u.skills || [],
+            reputation: u.reputation || 99.0,
+            tier: u.tier || "Platform Freelancer",
+            walletAddress: u.walletAddress || "0x0000000000000000000000000000000000000000",
+            milestonesCompleted: u.milestonesCompleted || 0,
+          },
+        };
+      })
+      .filter(({ score, freelancer }) => freelancer && (score > 0 || !skills.length))
+      .sort((a, b) => b.score - a.score)
+      .map(({ freelancer }) => freelancer);
+
+    if (scored.length > 0) return scored;
+    if (raw.length > 0) {
+      return raw.map((u: any) => ({
         id: u.uid || u.id || u.walletAddress,
         name: u.name || "Freelancer",
         handle: "@" + (u.name || "talent").replace(/\s+/g, "").toLowerCase(),
@@ -152,10 +201,13 @@ async function getRankedFreelancers(skills: string[]) {
         tier: u.tier || "Platform Freelancer",
         walletAddress: u.walletAddress || "0x0000000000000000000000000000000000000000",
         milestonesCompleted: u.milestonesCompleted || 0,
-      },
-    })).filter(({ score }) => score > 0 || !skills.length).sort((a, b) => b.score - a.score).map(({ freelancer }) => freelancer);
-    return scored.length > 0 ? scored : VERIFIED_FREELANCERS;
-  } catch { return VERIFIED_FREELANCERS; }
+      }));
+    }
+    return VERIFIED_FREELANCERS;
+  } catch (err) {
+    console.error("[agent] getRankedFreelancers error:", err);
+    return VERIFIED_FREELANCERS;
+  }
 }
 
 // ─── Local summary builders ───────────────────────────────────────────────────
