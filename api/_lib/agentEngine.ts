@@ -1,7 +1,5 @@
 import {
   TIER_LIMITS,
-  VERIFIED_GIGS,
-  VERIFIED_FREELANCERS,
   getISTDateString,
 } from "./shared";
 
@@ -114,67 +112,117 @@ function withAbort(timeoutMs: number): { signal: AbortSignal; clear: () => void 
   return { signal: controller.signal, clear: () => clearTimeout(timer) };
 }
 
-export async function fetchAndRankGigs(requestedTags: string[], minBudget?: number) {
+export async function fetchAndRankGigs(requestedTags: string[], minBudget?: number): Promise<any[]> {
   try {
     const { signal, clear } = withAbort(4000);
     const fbRes = await fetch(`${FB_BASE}/gigs.json`, { signal });
     clear();
+    if (!fbRes.ok) return [];
     const data = await fbRes.json();
-    const rawGigs: any[] = Object.values(data || {});
-    const pool = rawGigs.length > 0 ? rawGigs : VERIFIED_GIGS;
-    const scored = pool
-      .map((g: any) => ({
-        score: scoreGigRelevance(g, requestedTags, minBudget),
-        gig: {
-          id: String(g.id || Math.random()),
-          title: g.title,
-          budget: String(g.totalBudget ?? g.budget ?? "1.0").includes("tMSTC") ? String(g.totalBudget ?? g.budget) : `${g.totalBudget ?? g.budget} tMSTC`,
-          escrowPercent: "100%",
-          tags: g.technologies || g.tags || (g.category ? [g.category] : ["Web3"]),
-          reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
-          description: g.description,
-          clientAddress: g.client || g.clientAddress,
-          status: g.status || "Open",
-        },
-      }))
-      .filter(({ score }) => score > 0 || requestedTags.length === 0)
+    const rawGigs: any[] = Object.values(data || {}).filter(Boolean);
+    if (rawGigs.length === 0) return [];
+
+    const scored = rawGigs
+      .map((g: any) => {
+        if (!g) return { score: -1, gig: null };
+        return {
+          score: scoreGigRelevance(g, requestedTags, minBudget),
+          gig: {
+            id: String(g.id || Math.random()),
+            title: g.title,
+            budget: String(g.totalBudget ?? g.budget ?? "1.0").includes("tMSTC")
+              ? String(g.totalBudget ?? g.budget)
+              : `${g.totalBudget ?? g.budget} tMSTC`,
+            escrowPercent: "100%",
+            tags: g.technologies || g.tags || (g.category ? [g.category] : ["Web3"]),
+            reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
+            description: g.description,
+            clientAddress: g.client || g.clientAddress,
+            status: g.status || "Open",
+          },
+        };
+      })
+      .filter(({ score, gig }) => gig && (score > 0 || requestedTags.length === 0))
       .sort((a, b) => b.score - a.score)
       .map(({ gig }) => gig);
-    return scored.length > 0 ? scored : VERIFIED_GIGS;
-  } catch { return VERIFIED_GIGS; }
+
+    if (scored.length > 0) return scored;
+
+    // Return open marketplace gigs if tags didn't match strictly
+    return rawGigs.map((g: any) => ({
+      id: String(g.id || Math.random()),
+      title: g.title,
+      budget: String(g.totalBudget ?? g.budget ?? "1.0").includes("tMSTC")
+        ? String(g.totalBudget ?? g.budget)
+        : `${g.totalBudget ?? g.budget} tMSTC`,
+      escrowPercent: "100%",
+      tags: g.technologies || g.tags || (g.category ? [g.category] : ["Web3"]),
+      reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
+      description: g.description,
+      clientAddress: g.client || g.clientAddress,
+      status: g.status || "Open",
+    }));
+  } catch (err) {
+    console.error("[agentEngine] fetchAndRankGigs error:", err);
+    return [];
+  }
 }
 
-export async function fetchAndRankFreelancers(requestedSkills: string[]) {
+export async function fetchAndRankFreelancers(requestedSkills: string[]): Promise<any[]> {
   try {
     const { signal, clear } = withAbort(4000);
     const fbRes = await fetch(`${FB_BASE}/users.json`, { signal });
     clear();
+    if (!fbRes.ok) return [];
     const data = await fbRes.json();
-    const rawUsers: any[] = Object.values(data || {}).filter((u: any) => u.role === "freelancer");
-    const pool = rawUsers.length > 0 ? rawUsers : VERIFIED_FREELANCERS;
-    const scored = pool
-      .map((u: any) => ({
-        score: scoreFreelancerRelevance(u, requestedSkills),
-        freelancer: {
-          id: u.uid || u.id || u.walletAddress,
-          name: u.name || "Freelancer",
-          handle: "@" + (u.name || "talent").replace(/\s+/g, "").toLowerCase(),
-          designation: u.skills?.join(", ") || u.designation || "Web3 Developer",
-          skills: u.skills || [],
-          reputation: u.reputation || 99.0,
-          tier: u.tier || "Platform Freelancer",
-          walletAddress: u.walletAddress || "0x0000000000000000000000000000000000000000",
-          milestonesCompleted: u.milestonesCompleted || 0,
-        },
-      }))
-      .filter(({ score }) => score > 0 || requestedSkills.length === 0)
+    const rawUsers: any[] = Object.values(data || {}).filter((u: any) => u && u.role === "freelancer");
+    if (rawUsers.length === 0) return [];
+
+    const scored = rawUsers
+      .map((u: any) => {
+        if (!u) return { score: -1, freelancer: null };
+        return {
+          score: scoreFreelancerRelevance(u, requestedSkills),
+          freelancer: {
+            id: u.uid || u.id || u.walletAddress,
+            name: u.name || "Freelancer",
+            handle: "@" + (u.name || "talent").replace(/\s+/g, "").toLowerCase(),
+            designation: u.skills?.join(", ") || u.designation || "Web3 Developer",
+            skills: u.skills || [],
+            reputation: u.reputation || 99.0,
+            tier: u.tier || "Platform Freelancer",
+            walletAddress: u.walletAddress || "0x0000000000000000000000000000000000000000",
+            milestonesCompleted: u.milestonesCompleted || 0,
+          },
+        };
+      })
+      .filter(({ score, freelancer }) => freelancer && (score > 0 || requestedSkills.length === 0))
       .sort((a, b) => b.score - a.score)
       .map(({ freelancer }) => freelancer);
-    return scored.length > 0 ? scored : VERIFIED_FREELANCERS;
-  } catch { return VERIFIED_FREELANCERS; }
+
+    if (scored.length > 0) return scored;
+
+    return rawUsers.map((u: any) => ({
+      id: u.uid || u.id || u.walletAddress,
+      name: u.name || "Freelancer",
+      handle: "@" + (u.name || "talent").replace(/\s+/g, "").toLowerCase(),
+      designation: u.skills?.join(", ") || u.designation || "Web3 Developer",
+      skills: u.skills || [],
+      reputation: u.reputation || 99.0,
+      tier: u.tier || "Platform Freelancer",
+      walletAddress: u.walletAddress || "0x0000000000000000000000000000000000000000",
+      milestonesCompleted: u.milestonesCompleted || 0,
+    }));
+  } catch (err) {
+    console.error("[agentEngine] fetchAndRankFreelancers error:", err);
+    return [];
+  }
 }
 
 function buildGigSummary(gigs: any[], tags: string[]): string {
+  if (!gigs || gigs.length === 0) {
+    return "No open gigs currently found on the Zentrix marketplace. Check back soon or visit the Marketplace to create one.";
+  }
   const label = tags.length > 0 ? `**${tags.slice(0, 4).join(", ")}**` : "your criteria";
   let s = `Here are the top open gigs on Zentrix matching ${label}, secured by **MST Testnet milestone escrow**:\n\n`;
   for (const g of gigs.slice(0, 5)) {
@@ -188,6 +236,9 @@ function buildGigSummary(gigs: any[], tags: string[]): string {
 }
 
 function buildFreelancerSummary(freelancers: any[], skills: string[]): string {
+  if (!freelancers || freelancers.length === 0) {
+    return "No registered freelancers currently found on the Zentrix marketplace. Check back soon as more talent joins.";
+  }
   const label = skills.length > 0 ? `**${skills.slice(0, 4).join(", ")}**` : "your criteria";
   let s = `Here are verified Zentrix freelancers specializing in ${label}:\n\n`;
   for (const f of freelancers.slice(0, 5)) {
