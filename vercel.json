@@ -12,7 +12,11 @@
   ],
   "rewrites": [
     {
-      "source": "/((?!api/).*)",
+      "source": "/__/auth/(.*)",
+      "destination": "https://growup-dec3f.firebaseapp.com/__/auth/$1"
+    },
+    {
+      "source": "/((?!api/|__/auth/).*)",
       "destination": "/index.html"
     }
   ]
