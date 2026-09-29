@@ -120,9 +120,9 @@ All Zentrix contracts are deployed, active, and verified on **MST Blockchain Tes
 
 | Contract Name | Address | Explorer Link |
 |---|---|---|
-| **`ZentrixEscrow`** | `0xa50759E9CE985Fbb06503CaeC0DB9D1fB1233726` | [View on MSTScan](https://testnet.mstscan.com/address/0xa50759E9CE985Fbb06503CaeC0DB9D1fB1233726) |
-| **`ZentrixReputation`** | `0xB224Bd880326a5046F8526461d25fa5217636cA3` | [View on MSTScan](https://testnet.mstscan.com/address/0xB224Bd880326a5046F8526461d25fa5217636cA3) |
-| **`ZentrixPass`** | `0xE33932ba495ff04b321a2c7E58C34b43A7Ff2e9b` | [View on MSTScan](https://testnet.mstscan.com/address/0xE33932ba495ff04b321a2c7E58C34b43A7Ff2e9b) |
+| **`ZentrixEscrow`** | `0x8b6475a6C378625775Ca46447Fc52e483de896be` | [View on MSTScan](https://testnet.mstscan.com/address/0x8b6475a6C378625775Ca46447Fc52e483de896be) |
+| **`ZentrixReputation`** | `0x2a0f4cB2c514edde59762D685EE57D0678813935` | [View on MSTScan](https://testnet.mstscan.com/address/0x2a0f4cB2c514edde59762D685EE57D0678813935) |
+| **`ZentrixPass`** | `0x3EDad230dCFc6Dd3C357490b9feDa49639646BB7` | [View on MSTScan](https://testnet.mstscan.com/address/0x3EDad230dCFc6Dd3C357490b9feDa49639646BB7) |
 
 ### On-Chain Proof Transactions
 
@@ -150,21 +150,264 @@ The application avoids standard generic boilerplate templates and instead implem
 
 ---
 
-## 🧩 Smart Contract Deep Dive
+## 🧩 Smart Contract Reference
 
-Contracts are located in `/contracts` and written in Solidity `^0.8.20` using OpenZeppelin v5:
+All contracts are written in **Solidity `^0.8.20`**, use **OpenZeppelin v5**, and are deployed exclusively on **MST Blockchain Testnet (Chain ID `91562037`)**. No mainnet deployments exist. Source: [`contracts/contracts/`](./contracts/contracts/)
 
 ```
 contracts/
 ├── contracts/
-│   ├── ZentrixEscrow.sol        # Multi-milestone escrow with auto-release
-│   ├── ZentrixReputation.sol    # Soulbound ERC-721 credential tokens
-│   └── ZentrixPass.sol          # Subscription passes with 30-day duration
+│   ├── ZentrixEscrow.sol        # Multi-milestone escrow with auto-release & dispute resolution
+│   ├── ZentrixReputation.sol    # Soulbound ERC-721 credential tokens (non-transferable)
+│   └── ZentrixPass.sol          # Subscription passes with 30-day duration & tier pricing
 ├── test/
 │   ├── ZentrixEscrow.test.ts    # Comprehensive test suite (15 passing tests)
 │   └── test-helpers.ts          # Mock timestamps and ethers helpers
 └── hardhat.config.ts            # Network config for MST Testnet (Chain 91562037)
 ```
+
+---
+
+### 1. `ZentrixEscrow.sol`
+
+> **Address:** [`0x8b6475a6C378625775Ca46447Fc52e483de896be`](https://testnet.mstscan.com/address/0x8b6475a6C378625775Ca46447Fc52e483de896be)  
+> **Inherits:** `AccessControl`, `Pausable`, `ReentrancyGuard` (OpenZeppelin v5)
+
+Trust-minimized, multi-milestone project escrow. Client funds are locked non-custodially on gig creation; freelancer payments are released per-milestone via pull-payment withdrawal, preventing reentrancy and DOS.
+
+#### Access Roles
+
+| Role | Constant | Purpose |
+|---|---|---|
+| `DEFAULT_ADMIN_ROLE` | — | Contract administration and role grants |
+| `ARBITER_ROLE` | `keccak256("ARBITER_ROLE")` | Dispute resolution — split milestone funds |
+| `PAUSER_ROLE` | `keccak256("PAUSER_ROLE")` | Emergency pause / unpause |
+
+#### Enumerations
+
+```solidity
+enum GigStatus  { Open, Assigned, Active, Completed, Cancelled }
+enum MStatus    { Pending, Submitted, Approved, Rejected, Disputed, Resolved, AutoReleased }
+```
+
+#### Structs
+
+| Struct | Fields | Description |
+|---|---|---|
+| `Gig` | `id`, `client`, `freelancer`, `status`, `reviewWindow`, `assignedAt`, `agreementHash`, `agreementCID`, `metadataCID`, `milestoneCount` | On-chain project agreement record |
+| `Milestone` | `amount` (`uint96`), `deadline`, `criteriaHash`, `status`, `submittedAt`, `evidenceCID`, `reasonCID` | Per-milestone state |
+| `MilestonePlan` | `amount`, `deadline`, `criteriaHash` | Input struct for `createGig` |
+| `DeadlineProposal` | `newDeadline`, `proposedBy`, `pending` | Mutual deadline extension proposal |
+
+#### State Variables
+
+| Variable | Type | Description |
+|---|---|---|
+| `gigs` | `mapping(uint256 => Gig)` | All gig records by on-chain ID |
+| `milestones` | `mapping(uint256 => mapping(uint256 => Milestone))` | Milestone state per gig ID and index |
+| `deadlineProposals` | `mapping(uint256 => mapping(uint256 => DeadlineProposal))` | Pending deadline proposals |
+| `withdrawable` | `mapping(address => uint256)` | Pull-payment balance per address |
+| `totalLockedMilestoneFunds` | `uint256` | Invariant: total tMSTC locked in active milestones |
+| `totalWithdrawableFunds` | `uint256` | Invariant: total tMSTC available for withdrawal |
+| `reputationContract` | `IZentrixReputation` | Reference to ZentrixReputation for SBT minting |
+
+#### Functions
+
+| Function | Visibility | Modifier(s) | Description |
+|---|---|---|---|
+| `createGig(metadataCID, plan[], reviewWindow)` | `external payable` | `whenNotPaused`, `nonReentrant` | Creates a gig, locks total `tMSTC`. Emits `GigCreated`. |
+| `assignAndFund(gigId, freelancer, agreementHash, agreementCID)` | `external` | `whenNotPaused`, `nonReentrant` | Client assigns freelancer, records agreement. `Open → Assigned`. Emits `Funded`, `AgreementSigned`. |
+| `acceptAssignment(gigId)` | `external` | `whenNotPaused` | Freelancer accepts. `Assigned → Active`. Emits `AgreementSigned`. |
+| `cancelUnaccepted(gigId)` | `external` | `whenNotPaused`, `nonReentrant` | Client cancels after 48-hour window. Full refund to `withdrawable[client]`. Emits `GigCancelled`. |
+| `submitMilestone(gigId, i, evidenceCID)` | `external` | `whenNotPaused` | Freelancer anchors deliverable proof. `Pending/Rejected → Submitted`. Emits `MilestoneSubmitted`. |
+| `approveMilestone(gigId, i, rating)` | `external` | `whenNotPaused`, `nonReentrant` | Client approves. Releases funds to `withdrawable[freelancer]`. Triggers SBT mint on final milestone. Emits `MilestoneApproved`. |
+| `rejectMilestone(gigId, i, reasonCID)` | `external` | `whenNotPaused` | Client rejects with mandatory reason CID. `Submitted → Rejected`. Emits `MilestoneRejected`. |
+| `autoRelease(gigId, i)` | `external` | `whenNotPaused`, `nonReentrant` | Anyone triggers release after `reviewWindow` expires. Emits `MilestoneAutoReleased`. |
+| `raiseDispute(gigId, i)` | `external` | `whenNotPaused` | Freelancer escalates rejected milestone. `Rejected → Disputed`. Emits `MilestoneDisputed`. |
+| `resolveDispute(gigId, i, freelancerBps, rulingCID)` | `external` | `ARBITER_ROLE`, `whenNotPaused`, `nonReentrant` | Arbiter splits funds by basis points (0–10000). Emits `MilestoneResolved`. |
+| `proposeDeadline(gigId, i, newDeadline)` | `external` | `whenNotPaused` | Either party proposes a deadline extension. Emits `DeadlineProposed`. |
+| `acceptDeadline(gigId, i)` | `external` | `whenNotPaused` | Counterparty accepts deadline proposal. Emits `DeadlineAccepted`. |
+| `withdraw()` | `external` | `nonReentrant` | Pull-payment: moves full `withdrawable[msg.sender]` to caller. Emits `Withdrawn`. |
+| `getMilestones(gigId)` | `external view` | — | Returns full `Milestone[]` array for a gig. |
+| `setReputationContract(newContract)` | `external` | `DEFAULT_ADMIN_ROLE` | Updates ZentrixReputation reference. Emits `ReputationContractUpdated`. |
+| `pause()` / `unpause()` | `external` | `PAUSER_ROLE` | Emergency circuit breaker. |
+
+#### Events
+
+| Event | Parameters | Emitted When |
+|---|---|---|
+| `GigCreated` | `gigId`, `client`, `reviewWindow`, `totalBudget` | New gig created and funded |
+| `Funded` | `gigId`, `client`, `freelancer`, `totalAmount` | Freelancer assigned, agreement locked |
+| `AgreementSigned` | `gigId`, `party`, `agreementHash` | Client or freelancer acknowledges agreement |
+| `MilestoneSubmitted` | `gigId`, `milestoneIndex`, `evidenceCID` | Freelancer anchors deliverable proof |
+| `MilestoneApproved` | `gigId`, `milestoneIndex`, `amount`, `rating` | Client approves, funds released |
+| `MilestoneRejected` | `gigId`, `milestoneIndex`, `reasonCID` | Client rejects with mandatory reason |
+| `MilestoneDisputed` | `gigId`, `milestoneIndex` | Freelancer raises dispute |
+| `MilestoneResolved` | `gigId`, `milestoneIndex`, `freelancerBps`, `rulingCID` | Arbiter issues ruling |
+| `MilestoneAutoReleased` | `gigId`, `milestoneIndex`, `amount` | Auto-release after review window |
+| `DeadlineProposed` | `gigId`, `milestoneIndex`, `newDeadline`, `proposedBy` | Deadline extension proposed |
+| `DeadlineAccepted` | `gigId`, `milestoneIndex`, `newDeadline` | Counterparty accepts deadline |
+| `Withdrawn` | `recipient`, `amount` | Pull-payment successfully executed |
+| `GigCompleted` | `gigId`, `freelancer` | All milestones resolved |
+| `GigCancelled` | `gigId`, `refundAmount` | Unaccepted gig cancelled, client refunded |
+| `ReputationContractUpdated` | `newContract` | Admin updates reputation contract |
+
+#### Custom Errors
+
+| Error | Condition |
+|---|---|
+| `GigNotFound()` | Gig ID does not exist (`client == address(0)`) |
+| `NotGigClient()` | Caller is not the gig's client |
+| `NotGigFreelancer()` | Caller is not the assigned freelancer |
+| `Unauthorized()` | Caller is neither client nor freelancer |
+| `InvalidGigStatus(expected, current)` | Gig is not in the required status |
+| `InvalidMilestoneIndex()` | Milestone index ≥ `milestoneCount` |
+| `InvalidMilestoneStatus(expected, current)` | Milestone is not in the required status |
+| `IncorrectFundingAmount(expected, provided)` | `msg.value` doesn't match milestone sum |
+| `ReviewWindowNotPassed()` | Auto-release before `reviewWindow` elapsed |
+| `AcceptancePeriodNotPassed()` | Cancel before 48-hour acceptance window |
+| `InvalidDisputeSplit()` | `freelancerBps > 10000` |
+| `NoWithdrawableFunds()` | `withdrawable[msg.sender] == 0` |
+| `ZeroAddress()` | Supplied address is `address(0)` |
+| `EmptyCID()` | Empty string CID supplied |
+| `ProposalAlreadyPending()` | Deadline proposal already exists |
+| `NoPendingProposal()` | No proposal exists to accept |
+| `CannotAcceptOwnProposal()` | Proposer tries to self-accept |
+
+---
+
+### 2. `ZentrixReputation.sol`
+
+> **Address:** [`0x2a0f4cB2c514edde59762D685EE57D0678813935`](https://testnet.mstscan.com/address/0x2a0f4cB2c514edde59762D685EE57D0678813935)  
+> **Inherits:** `ERC721`, `AccessControl`, `Pausable` (OpenZeppelin v5)  
+> **Token:** `ZXREP` — `Zentrix Reputation`
+
+Strictly **non-transferable (Soulbound) ERC-721** credential tokens minted by `ZentrixEscrow` on final milestone approval. Any transfer attempt is reverted at the `_update` hook level.
+
+#### Access Roles
+
+| Role | Constant | Purpose |
+|---|---|---|
+| `DEFAULT_ADMIN_ROLE` | — | Contract administration |
+| `MINTER_ROLE` | `keccak256("MINTER_ROLE")` | Authorized to mint (granted to `ZentrixEscrow`) |
+| `PAUSER_ROLE` | `keccak256("PAUSER_ROLE")` | Emergency pause / unpause |
+
+#### Structs
+
+| Struct | Fields | Description |
+|---|---|---|
+| `ReputationData` | `gigId` (`uint256`), `rating` (`uint8`, 1–5), `completedAt` (`uint64`), `evidenceCID` (`string`) | Immutable metadata on each credential NFT |
+
+#### State Variables
+
+| Variable | Type | Description |
+|---|---|---|
+| `_reputations` | `mapping(uint256 => ReputationData)` | Credential metadata per token ID |
+| `_userTokens` | `mapping(address => uint256[])` | Token IDs held by each address |
+| `_ratingSum` | `mapping(address => uint256)` | Cumulative rating sum per address |
+| `_ratingCount` | `mapping(address => uint256)` | Completed gig count per address |
+| `_tokenURIs` | `mapping(uint256 => string)` | Optional on-chain token URI |
+
+#### Functions
+
+| Function | Visibility | Modifier(s) | Description |
+|---|---|---|---|
+| `mintReputation(to, gigId, rating, evidenceCID)` | `external` | `MINTER_ROLE`, `whenNotPaused` | Mints a soulbound credential, stores metadata, updates rating aggregates. Emits `ReputationMinted`. |
+| `getReputationScore(account)` | `external view` | — | Returns `(scoreBps, completedCount)`. `scoreBps` = average rating × 100 (e.g. `480` = 4.80/5). |
+| `getReputation(tokenId)` | `external view` | — | Returns `ReputationData` for a token ID. |
+| `getUserTokens(account)` | `external view` | — | Returns all token IDs owned by `account`. |
+| `totalSupply()` | `external view` | — | Returns total credentials minted. |
+| `pause()` / `unpause()` | `external` | `PAUSER_ROLE` | Emergency circuit breaker. |
+| `_update(to, tokenId, auth)` | `internal override` | `whenNotPaused` | **Soulbound enforcement:** reverts any transfer between non-zero addresses. |
+
+#### Events
+
+| Event | Parameters | Emitted When |
+|---|---|---|
+| `ReputationMinted` | `tokenId`, `freelancer`, `gigId`, `rating` | New credential minted on milestone completion |
+
+#### Reverts
+
+| Condition | Behaviour |
+|---|---|
+| `rating < 1 \|\| rating > 5` | Reverts with `"ZentrixReputation: rating must be between 1 and 5"` |
+| `to == address(0)` | Reverts with `"ZentrixReputation: zero address"` |
+| Transfer between non-zero addresses | `_update` reverts with `"ZentrixReputation: soulbound, non-transferable"` |
+
+---
+
+### 3. `ZentrixPass.sol`
+
+> **Address:** [`0x3EDad230dCFc6Dd3C357490b9feDa49639646BB7`](https://testnet.mstscan.com/address/0x3EDad230dCFc6Dd3C357490b9feDa49639646BB7)  
+> **Inherits:** `ERC721`, `AccessControl`, `Pausable`, `ReentrancyGuard` (OpenZeppelin v5)  
+> **Token:** `ZXPASS` — `Zentrix Pass`
+
+Tiered **soulbound ERC-721** subscription NFTs gating daily AI query quotas in the Sarvam 30B agent. Passes expire after 30 days; excess payment is automatically refunded.
+
+#### Access Roles
+
+| Role | Constant | Purpose |
+|---|---|---|
+| `DEFAULT_ADMIN_ROLE` | — | Update tier pricing, withdraw fees |
+| `PAUSER_ROLE` | `keccak256("PAUSER_ROLE")` | Emergency pause / unpause |
+
+#### Constants & Tier Pricing (Testnet)
+
+| Constant | Value | Description |
+|---|---|---|
+| `PASS_DURATION` | `30 days` | Subscription validity after purchase |
+
+| Tier | Label | Price | Daily AI Queries |
+|---|---|---|---|
+| `0` | Free | Free (no NFT required) | 2 / day |
+| `1` | PRO | `5 tMSTC` | 10 / day |
+| `2` | Enterprise | `15 tMSTC` | 15 / day |
+
+Prices live in `tierPrices[tier]` and are updatable by admin.
+
+#### Structs
+
+| Struct | Fields | Description |
+|---|---|---|
+| `PassData` | `tier` (`uint8`), `expiresAt` (`uint64`), `tokenId` (`uint256`) | Active pass record per wallet |
+
+#### State Variables
+
+| Variable | Type | Description |
+|---|---|---|
+| `activePasses` | `mapping(address => PassData)` | Active pass per wallet (overwritten on renewal/upgrade) |
+| `tierPrices` | `mapping(uint8 => uint256)` | Price in wei per tier |
+
+#### Functions
+
+| Function | Visibility | Modifier(s) | Description |
+|---|---|---|---|
+| `buy(tier)` | `external payable` | `whenNotPaused`, `nonReentrant` | Purchases 30-day pass for tier 1 or 2. Mints ERC-721, records `PassData`, auto-refunds excess. Emits `PassPurchased`. |
+| `tierOf(account)` | `external view` | — | Returns active tier (`0` if no pass or expired). Used by agent engine for quota enforcement. |
+| `getPass(account)` | `external view` | — | Returns `(tier, expiresAt, tokenId)`. |
+| `setPrice(tier, priceWei)` | `external` | `DEFAULT_ADMIN_ROLE` | Updates tier price. Emits `PriceUpdated`. |
+| `withdrawFees()` | `external` | `DEFAULT_ADMIN_ROLE`, `nonReentrant` | Admin withdraws accumulated pass purchase fees. |
+| `pause()` / `unpause()` | `external` | `PAUSER_ROLE` | Emergency circuit breaker. |
+| `_update(to, tokenId, auth)` | `internal override` | `whenNotPaused` | **Soulbound enforcement:** reverts transfers between non-zero addresses. |
+
+#### Events
+
+| Event | Parameters | Emitted When |
+|---|---|---|
+| `PassPurchased` | `buyer`, `tokenId`, `tier`, `expiresAt` | New pass subscription minted |
+| `PriceUpdated` | `tier`, `newPrice` | Admin updates a tier's price |
+
+#### Reverts
+
+| Condition | Behaviour |
+|---|---|
+| `tier != 1 && tier != 2` | Reverts with `"ZentrixPass: invalid tier"` |
+| `msg.value < tierPrices[tier]` | Reverts with `"ZentrixPass: insufficient payment"` |
+| Excess refund call fails | Reverts with `"ZentrixPass: excess refund failed"` |
+| `withdrawFees()` on zero balance | Reverts with `"ZentrixPass: zero balance"` |
+| Transfer between non-zero addresses | `_update` reverts with `"ZentrixPass: soulbound, non-transferable"` |
+
+---
 
 ### Test Suite Results
 ```bash
