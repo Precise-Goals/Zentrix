@@ -57,9 +57,10 @@ export async function scanNFTAssets(
     checksumAddress = ethers.getAddress(address);
   } catch (_) {}
 
-  // Fallback to public RPC provider if none provided
-  const provider =
-    providerOverride ?? new ethers.JsonRpcProvider(RPC_URL);
+  try {
+    // Always query on-chain data directly via public JSON-RPC to avoid
+    // extension lifecycle or stale provider errors from injected wallets
+    const provider = new ethers.JsonRpcProvider(RPC_URL);
 
   const passContract = new Contract(
     CONTRACT_ADDRESSES.ZentrixPass,
@@ -184,5 +185,9 @@ export async function scanNFTAssets(
     } catch (_) {}
   }
 
-  return result;
+    return result;
+  } catch (scanErr) {
+    console.warn("[nftScanner] On-chain scan failed, using fallback:", scanErr);
+    return getCachedNFTAssets(address);
+  }
 }

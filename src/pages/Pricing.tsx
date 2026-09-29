@@ -16,7 +16,7 @@ import {
   Lock,
 } from "lucide-react";
 import { useWallet } from "../context/WalletContext";
-import { CONTRACT_ADDRESSES, CONTRACT_ABIS } from "../contracts";
+import { CONTRACT_ADDRESSES, CONTRACT_ABIS, RPC_URL } from "../contracts";
 import { getCachedNFTAssets, scanNFTAssets } from "../lib/nftScanner";
 
 type TxStage = "idle" | "pending" | "confirmed" | "error";
@@ -62,9 +62,7 @@ export const PricingPage: React.FC = () => {
   const fetchChainData = useCallback(async () => {
     setChain((s) => ({ ...s, error: null }));
     try {
-      const rpc =
-        provider ??
-        new ethers.JsonRpcProvider("https://testnetrpc.mstblockchain.com");
+      const rpc = new ethers.JsonRpcProvider(RPC_URL);
 
       const passContract = new Contract(
         CONTRACT_ADDRESSES.ZentrixPass,
@@ -84,7 +82,7 @@ export const PricingPage: React.FC = () => {
 
       if (address) {
         // Deep scan MST blockchain for user pass & token assets
-        const scan = await scanNFTAssets(address, rpc);
+        const scan = await scanNFTAssets(address);
         userTier = scan.passTier;
         expiresAt = scan.passExpiresAt || 0;
         tokenId = scan.passTokenId || "0";
@@ -114,7 +112,7 @@ export const PricingPage: React.FC = () => {
         error: "Unable to query MST Testnet pass contract: " + (err?.message ?? "Network error"),
       }));
     }
-  }, [address, provider]);
+  }, [address]);
 
   useEffect(() => {
     fetchChainData();
@@ -123,13 +121,13 @@ export const PricingPage: React.FC = () => {
   // Periodic background re-scan to keep assets fresh on reload and live updates
   useEffect(() => {
     if (address) {
-      scanNFTAssets(address, provider);
+      scanNFTAssets(address).catch(() => {});
       const interval = setInterval(() => {
-        scanNFTAssets(address, provider);
+        scanNFTAssets(address).catch(() => {});
       }, 12000);
       return () => clearInterval(interval);
     }
-  }, [address, provider]);
+  }, [address]);
 
   useEffect(() => {
     const onScanned = (e: any) => {
@@ -183,11 +181,20 @@ export const PricingPage: React.FC = () => {
       setTxStage("confirmed");
 
       // Deep scan and refresh on-chain state
-      await scanNFTAssets(address, signer);
+      await scanNFTAssets(address);
       await fetchChainData();
     } catch (err: any) {
       setTxStage("error");
-      setTxError(err?.reason ?? err?.message ?? "Transaction was rejected or failed on chain.");
+      const msg = (err?.message || err?.error?.message || "").toLowerCase();
+      if (
+        err?.code === -32603 ||
+        msg.includes("bridgekey was updated") ||
+        msg.includes("refresh this page")
+      ) {
+        setTxError("BridgeKey extension was updated. Please refresh the page and reconnect your wallet.");
+      } else {
+        setTxError(err?.reason ?? err?.message ?? "Transaction was rejected or failed on chain.");
+      }
     } finally {
       setTxTier(null);
     }

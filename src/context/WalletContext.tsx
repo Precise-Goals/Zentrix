@@ -75,19 +75,51 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const getInjectedProvider = (preferred?: "bridgekey" | "injected") => {
     if (typeof window === "undefined") return null;
     const w = window as any;
-
-    if (preferred === "bridgekey") {
-      return w.bridgekey || w.ethereum || null;
-    }
+    if (preferred === "bridgekey") return w.bridgekey || w.ethereum || null;
     return w.bridgekey || w.ethereum || null;
   };
 
-  const updateBalance = useCallback(async (addr: string, prov: any) => {
+  // Detect BridgeKey stale-provider error (extension updated mid-session)
+  const isBridgeKeyStale = (err: any): boolean => {
+    const msg = (err?.message || err?.error?.message || "").toLowerCase();
+    const code = err?.code ?? err?.error?.code;
+    return (
+      (code === -32603 || code === "UNKNOWN_ERROR") &&
+      (msg.includes("bridgekey was updated") ||
+        msg.includes("refresh this page") ||
+        msg.includes("click connect wallet again"))
+    ) || msg.includes("bridgekey was updated");
+  };
+
+  // Re-initialize provider from the live window.bridgekey after an extension update
+  const refreshProvider = useCallback(async (currentAddress: string) => {
     try {
-      const bal = await prov.getBalance(addr);
+      const ethereum = getInjectedProvider("bridgekey");
+      if (!ethereum) return;
+      const freshProvider = new BrowserProvider(ethereum, "any");
+      const accounts: string[] = await freshProvider.send("eth_accounts", []);
+      if (accounts && accounts.length > 0) {
+        const freshSigner = await freshProvider.getSigner();
+        setProvider(freshProvider);
+        setSigner(freshSigner);
+        setAddress(accounts[0]);
+        try {
+          const bal = await publicJsonRpcProvider.getBalance(accounts[0]);
+          setBalance(parseFloat(formatEther(bal)).toFixed(4));
+        } catch {}
+        console.info("[WalletContext] BridgeKey provider refreshed after extension update");
+      }
+    } catch (e) {
+      console.warn("[WalletContext] Provider refresh failed:", e);
+    }
+  }, []);
+
+  const updateBalance = useCallback(async (addr: string) => {
+    try {
+      const bal = await publicJsonRpcProvider.getBalance(addr);
       setBalance(parseFloat(formatEther(bal)).toFixed(4));
-    } catch {
-      // balance fetch is non-critical
+    } catch (err: any) {
+      console.warn("[WalletContext] balance fetch failed:", err);
     }
   }, []);
 
@@ -178,11 +210,11 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setAddress(accountAddress);
       setWalletType(preferredType || "bridgekey");
 
-      await updateBalance(accountAddress, browserProvider);
+      await updateBalance(accountAddress);
       localStorage.setItem("zx_connected_type", preferredType || "bridgekey");
       localStorage.setItem("zx_connected_address", accountAddress);
       localStorage.setItem("zx_wallet_approved", "true");
-      scanNFTAssets(accountAddress, browserProvider);
+      scanNFTAssets(accountAddress).catch(() => {});
       return accountAddress;
     } catch (error: any) {
       throw error;
@@ -265,6 +297,11 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       return await activeSigner.signMessage(message);
     } catch (err: any) {
+      if (isBridgeKeyStale(err)) {
+        throw new Error(
+          "BridgeKey extension was updated. Please refresh this page, then click Connect Wallet again."
+        );
+      }
       if (
         err?.code === 4001 ||
         err?.message?.includes("rejected") ||
@@ -375,9 +412,9 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             setSigner(activeSigner);
             setAddress(accountAddress);
             setWalletType(savedType);
-            await updateBalance(accountAddress, browserProvider);
+            await updateBalance(accountAddress);
             localStorage.setItem("zx_connected_address", accountAddress);
-            scanNFTAssets(accountAddress, browserProvider);
+            scanNFTAssets(accountAddress).catch(() => {});
           } else {
             // Extension is present but origin is not authorized yet
             setAddress(null);
@@ -419,7 +456,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const activeSigner = await browserProvider.getSigner();
             setSigner(activeSigner);
             setProvider(browserProvider);
-            updateBalance(accounts[0], browserProvider);
+            updateBalance(accounts[0]);
           } catch {}
         }
       };
@@ -429,15 +466,26 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         window.location.reload();
       };
 
+      // BridgeKey emits an error event when its extension self-updates and the
+      // provider becomes stale. Catch it and silently refresh instead of crashing.
+      const handleProviderError = (err: any) => {
+        if (isBridgeKeyStale(err)) {
+          const currentAddr = address;
+          if (currentAddr) refreshProvider(currentAddr);
+        }
+      };
+
       ethereum.on("accountsChanged", handleAccountsChanged);
       ethereum.on("chainChanged", handleChainChanged);
+      if (ethereum.on) ethereum.on("error", handleProviderError);
 
       return () => {
         ethereum.removeListener("accountsChanged", handleAccountsChanged);
         ethereum.removeListener("chainChanged", handleChainChanged);
+        if (ethereum.removeListener) ethereum.removeListener("error", handleProviderError);
       };
     }
-  }, [provider, updateBalance]);
+  }, [provider, updateBalance, address, refreshProvider]);
 
   const isConnected = !!address && !!signer;
   const isCorrectNetwork = chainId === MST_TESTNET_CHAIN_ID;

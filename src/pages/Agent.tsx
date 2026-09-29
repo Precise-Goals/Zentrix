@@ -438,14 +438,14 @@ export const AgentPage: React.FC = () => {
       setUserTier(cached.passTier);
     }
 
-    scanNFTAssets(address, provider)
+    scanNFTAssets(address)
       .then((res) => {
         if (typeof res.passTier === "number") {
           setUserTier(res.passTier);
         }
       })
       .catch(() => {});
-  }, [address, provider]);
+  }, [address]);
 
   // Synchronize creditsLeft ceiling when userTier changes
   useEffect(() => {

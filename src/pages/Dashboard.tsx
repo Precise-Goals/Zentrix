@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useWallet } from "../context/WalletContext";
 import { ethers } from "ethers";
-import { CONTRACT_ADDRESSES, CONTRACT_ABIS } from "../contracts";
+import { CONTRACT_ADDRESSES, CONTRACT_ABIS, RPC_URL } from "../contracts";
 import { getCachedNFTAssets, scanNFTAssets } from "../lib/nftScanner";
 import { rtdb } from "../lib/firebase";
 import { ref, onValue, set, get, update } from "firebase/database";
@@ -303,14 +303,15 @@ export const DashboardPage: React.FC = () => {
 
   // ── Fetch on-chain data ─────────────────────────────────────────
   const fetchMetrics = useCallback(async () => {
-    if (!address || !provider) return;
+    if (!address) return;
 
     setMetrics((m) => ({ ...m, loading: true, error: null }));
     try {
+      const readProvider = new ethers.JsonRpcProvider(RPC_URL);
       const escrow = new ethers.Contract(
         CONTRACT_ADDRESSES.ZentrixEscrow,
         CONTRACT_ABIS.ZentrixEscrow,
-        provider
+        readProvider
       );
 
       // Withdrawable balance from escrow
@@ -321,7 +322,7 @@ export const DashboardPage: React.FC = () => {
       } catch (_) { /* address has no balance yet */ }
 
       // Deep scan all on-chain NFT assets (Passes, Events, SBTs)
-      const scan = await scanNFTAssets(address, provider);
+      const scan = await scanNFTAssets(address);
       const passTier = scan.passTier ?? 0;
       const passTokenId = scan.passTokenId ? Number(scan.passTokenId) : null;
       const reputationTokenCount = scan.reputationCount;
@@ -337,7 +338,7 @@ export const DashboardPage: React.FC = () => {
     } catch (err: any) {
       setMetrics((m) => ({ ...m, loading: false, error: err?.message ?? "Chain read failed" }));
     }
-  }, [address, provider]);
+  }, [address]);
 
   useEffect(() => {
     if (isConnected) fetchMetrics();
@@ -346,13 +347,13 @@ export const DashboardPage: React.FC = () => {
   // Periodic background re-scan to keep assets fresh on reload and live updates
   useEffect(() => {
     if (address) {
-      scanNFTAssets(address, provider);
+      scanNFTAssets(address).catch(() => {});
       const interval = setInterval(() => {
-        scanNFTAssets(address, provider);
+        scanNFTAssets(address).catch(() => {});
       }, 12000);
       return () => clearInterval(interval);
     }
-  }, [address, provider]);
+  }, [address]);
 
   useEffect(() => {
     const onScanned = (e: any) => {
