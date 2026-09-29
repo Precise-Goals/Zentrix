@@ -1,3 +1,5 @@
+export const RPC_URL = "https://testnetrpc.mstblockchain.com";
+
 export const CONTRACT_ADDRESSES = {
   ZentrixReputation: '0x2a0f4cB2c514edde59762D685EE57D0678813935',
   ZentrixEscrow: '0x8b6475a6C378625775Ca46447Fc52e483de896be',
