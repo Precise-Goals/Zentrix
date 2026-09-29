@@ -20,21 +20,6 @@ function getISTDateString(): string {
 // ─── In-memory rate store ─────────────────────────────────────────────────────
 const usageStore = new Map<string, number>();
 
-// ─── Fallback data ────────────────────────────────────────────────────────────
-const VERIFIED_GIGS = [
-  { id: "1", title: "BridgeKey Multi-Sig Wallet Integration", budget: "3.5 tMSTC", escrowPercent: "100%", tags: ["Solidity", "React", "BridgeKey Integration"], reviewWindow: "72h Auto-Release", description: "Build native BridgeKey signature request and transaction confirmation hooks with EIP-712 support.", status: "Open" },
-  { id: "2", title: "Solidity Escrow Contract Invariant Fuzzing", budget: "2.0 tMSTC", escrowPercent: "100%", tags: ["Smart Contracts", "Security Audits", "Foundry"], reviewWindow: "48h Auto-Release", description: "Write Foundry and Echidna fuzz tests asserting that total contract balance equals locked plus withdrawable funds.", status: "Open" },
-  { id: "3", title: "Frontend DApp Dashboard — React & TypeScript", budget: "2.2 tMSTC", escrowPercent: "100%", tags: ["React", "TypeScript", "Vite", "UI/UX"], reviewWindow: "72h Auto-Release", description: "Build responsive milestone tracker dashboard with live on-chain data and BridgeKey wallet integration.", status: "Open" },
-  { id: "4", title: "3D Brand Identity & Interactive Spline Motion", budget: "2.5 tMSTC", escrowPercent: "100%", tags: ["Blender", "Spline", "Three.js"], reviewWindow: "48h Auto-Release", description: "Create futuristic 3D assets and interactive canvas components for Zentrix DApp.", status: "Open" },
-  { id: "5", title: "MST Developer Documentation & Whitepaper", budget: "1.8 tMSTC", escrowPercent: "100%", tags: ["Technical Writing", "GitBook", "Solidity"], reviewWindow: "72h Auto-Release", description: "Write in-depth developer tutorials, contract walkthroughs, and technical whitepaper.", status: "Open" },
-];
-
-const VERIFIED_FREELANCERS = [
-  { id: "f1", name: "Alex Dev", handle: "@alexdev", designation: "Senior Smart Contract Engineer", skills: ["Solidity", "OpenZeppelin v5", "Hardhat", "Foundry"], reputation: 99.4, tier: "Tier 2 Builder Pass", walletAddress: "0x8cA0f3176997F32CCBb4598Fc8C966C95aeEEc9e", milestonesCompleted: 14 },
-  { id: "f2", name: "Priya Sharma", handle: "@priyasharma", designation: "Lead Frontend Web3 Architect", skills: ["React", "Vite", "BridgeKey", "TypeScript", "Tailwind"], reputation: 98.8, tier: "Tier 2 Builder Pass", walletAddress: "0x7FC1d02922d4865fd53De59697407a42e64d1Cad", milestonesCompleted: 11 },
-  { id: "f3", name: "Vikram Malhotra", handle: "@vikramm", designation: "Web3 Security Auditor & QA", skills: ["Slither", "Echidna", "Invariant Fuzzing", "Solidity"], reputation: 99.1, tier: "Tier 2 Builder Pass", walletAddress: "0x73595081334A18D4298A160b162faB4Fb4B3c85B", milestonesCompleted: 18 },
-];
-
 // ─── Semantic tag aliases ─────────────────────────────────────────────────────
 const TAG_ALIAS_MAP: Record<string, string[]> = {
   react: ["React", "TypeScript", "JavaScript", "Vite"],
@@ -98,16 +83,18 @@ function scoreFreelancer(f: any, skills: string[]): number {
 // ─── Firebase fetch helpers ───────────────────────────────────────────────────
 const FB_BASE = "https://growup-dec3f-default-rtdb.asia-southeast1.firebasedatabase.app";
 
-async function getRankedGigs(tags: string[], minBudget?: number) {
+async function getRankedGigs(tags: string[], minBudget?: number): Promise<any[]> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 4000);
     const res = await fetch(`${FB_BASE}/gigs.json`, { signal: ctrl.signal });
     clearTimeout(t);
+    if (!res.ok) return [];
     const data = await res.json();
     const raw: any[] = Object.values(data || {}).filter(Boolean);
-    const pool = raw.length > 0 ? raw : VERIFIED_GIGS;
-    const scored = pool
+    if (raw.length === 0) return [];
+
+    const scored = raw
       .map((g: any) => {
         if (!g) return { score: -1, gig: null };
         if (minBudget !== undefined) {
@@ -136,38 +123,39 @@ async function getRankedGigs(tags: string[], minBudget?: number) {
       .map(({ gig }) => gig);
 
     if (scored.length > 0) return scored;
-    if (raw.length > 0) {
-      return raw.map((g: any) => ({
-        id: String(g.id || Math.random()),
-        title: g.title,
-        budget: String(g.totalBudget ?? g.budget ?? "1.0").includes("tMSTC")
-          ? String(g.totalBudget ?? g.budget)
-          : `${g.totalBudget ?? g.budget} tMSTC`,
-        escrowPercent: "100%",
-        tags: g.technologies || g.tags || [g.category || "Web3"],
-        reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
-        description: g.description,
-        clientAddress: g.client || g.clientAddress,
-        status: g.status || "Open",
-      }));
-    }
-    return VERIFIED_GIGS;
+
+    // If query tags didn't match directly, return the open marketplace gigs
+    return raw.map((g: any) => ({
+      id: String(g.id || Math.random()),
+      title: g.title,
+      budget: String(g.totalBudget ?? g.budget ?? "1.0").includes("tMSTC")
+        ? String(g.totalBudget ?? g.budget)
+        : `${g.totalBudget ?? g.budget} tMSTC`,
+      escrowPercent: "100%",
+      tags: g.technologies || g.tags || [g.category || "Web3"],
+      reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
+      description: g.description,
+      clientAddress: g.client || g.clientAddress,
+      status: g.status || "Open",
+    }));
   } catch (err) {
     console.error("[agent] getRankedGigs error:", err);
-    return VERIFIED_GIGS;
+    return [];
   }
 }
 
-async function getRankedFreelancers(skills: string[]) {
+async function getRankedFreelancers(skills: string[]): Promise<any[]> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 4000);
     const res = await fetch(`${FB_BASE}/users.json`, { signal: ctrl.signal });
     clearTimeout(t);
+    if (!res.ok) return [];
     const data = await res.json();
     const raw: any[] = Object.values(data || {}).filter((u: any) => u && u.role === "freelancer");
-    const pool = raw.length > 0 ? raw : VERIFIED_FREELANCERS;
-    const scored = pool
+    if (raw.length === 0) return [];
+
+    const scored = raw
       .map((u: any) => {
         if (!u) return { score: -1, freelancer: null };
         return {
@@ -190,28 +178,30 @@ async function getRankedFreelancers(skills: string[]) {
       .map(({ freelancer }) => freelancer);
 
     if (scored.length > 0) return scored;
-    if (raw.length > 0) {
-      return raw.map((u: any) => ({
-        id: u.uid || u.id || u.walletAddress,
-        name: u.name || "Freelancer",
-        handle: "@" + (u.name || "talent").replace(/\s+/g, "").toLowerCase(),
-        designation: u.skills?.join(", ") || u.designation || "Web3 Developer",
-        skills: u.skills || [],
-        reputation: u.reputation || 99.0,
-        tier: u.tier || "Platform Freelancer",
-        walletAddress: u.walletAddress || "0x0000000000000000000000000000000000000000",
-        milestonesCompleted: u.milestonesCompleted || 0,
-      }));
-    }
-    return VERIFIED_FREELANCERS;
+
+    // Return registered marketplace freelancers
+    return raw.map((u: any) => ({
+      id: u.uid || u.id || u.walletAddress,
+      name: u.name || "Freelancer",
+      handle: "@" + (u.name || "talent").replace(/\s+/g, "").toLowerCase(),
+      designation: u.skills?.join(", ") || u.designation || "Web3 Developer",
+      skills: u.skills || [],
+      reputation: u.reputation || 99.0,
+      tier: u.tier || "Platform Freelancer",
+      walletAddress: u.walletAddress || "0x0000000000000000000000000000000000000000",
+      milestonesCompleted: u.milestonesCompleted || 0,
+    }));
   } catch (err) {
     console.error("[agent] getRankedFreelancers error:", err);
-    return VERIFIED_FREELANCERS;
+    return [];
   }
 }
 
 // ─── Local summary builders ───────────────────────────────────────────────────
 function gigSummary(gigs: any[], tags: string[]): string {
+  if (!gigs || gigs.length === 0) {
+    return "No open gigs currently found on the Zentrix marketplace. Check back soon or visit the Marketplace to create one.";
+  }
   const label = tags.length ? `**${tags.slice(0, 4).join(", ")}**` : "your criteria";
   let s = `Here are the top open gigs on Zentrix matching ${label}, secured by **MST Testnet milestone escrow**:\n\n`;
   for (const g of gigs.slice(0, 5)) {
@@ -225,6 +215,9 @@ function gigSummary(gigs: any[], tags: string[]): string {
 }
 
 function freelancerSummary(freelancers: any[], skills: string[]): string {
+  if (!freelancers || freelancers.length === 0) {
+    return "No registered freelancers currently found on the Zentrix marketplace. Check back soon as more talent joins.";
+  }
   const label = skills.length ? `**${skills.slice(0, 4).join(", ")}**` : "your criteria";
   let s = `Here are verified Zentrix freelancers specializing in ${label}:\n\n`;
   for (const f of freelancers.slice(0, 5)) {
