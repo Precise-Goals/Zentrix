@@ -421,14 +421,15 @@ export const AgentPage: React.FC = () => {
     return cached.passTier || 0;
   });
 
-  const maxCredits = userTier === 2 ? 15 : userTier === 1 ? 10 : 5;
+  // Must match TIER_LIMITS in api/_lib/shared.ts: { 0: 2, 1: 10, 2: 15 }
+  const maxCredits = userTier === 2 ? 15 : userTier === 1 ? 10 : 2;
   const [creditsLeft, setCreditsLeft] = useState<number>(maxCredits);
 
   // Scan on-chain NFT assets whenever address or provider changes
   useEffect(() => {
     if (!address) {
       setUserTier(0);
-      setCreditsLeft(5);
+      setCreditsLeft(2);
       return;
     }
 
@@ -489,7 +490,15 @@ export const AgentPage: React.FC = () => {
         }),
       });
 
-      const data = await res.json();
+      // Safe JSON parse — server may return plain-text on 500/502 (Vercel edge errors)
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        // Body was not JSON (e.g. "A server error occurred"). Surface a clean message.
+        data = { error: `Server error (${res.status}): ${rawText.slice(0, 120)}` };
+      }
 
       if (res.status === 429) {
         setPaywallOpen(true);

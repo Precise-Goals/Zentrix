@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently --names \"vite,server\" --prefix-colors \"cyan,magenta\" \"vite --port 3000\" \"bun run server/index.ts\"",
-    "dev:server": "bun run server/index.ts",
+    "dev": "concurrently --names \"vite,server\" --prefix-colors \"cyan,magenta\" \"vite --port 3000\" \"bun run --watch server/index.ts\"",
+    "dev:server": "bun run --watch server/index.ts",
     "build": "vite build",
     "preview": "vite preview",
     "start": "bun run server/index.ts",
