@@ -111,11 +111,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let toolResult: any[] = [];
 
       if (fnName === "search_gigs") {
-        returnedGigs = VERIFIED_GIGS;
-        toolResult = VERIFIED_GIGS;
+        try {
+          const fbRes = await fetch("https://growup-dec3f-default-rtdb.asia-southeast1.firebasedatabase.app/gigs.json");
+          const data = await fbRes.json();
+          const liveGigs = Object.values(data || {}).map((g: any) => ({
+            id: g.id,
+            title: g.title,
+            budget: g.totalBudget + " tMSTC",
+            escrowPercent: "100%",
+            tags: g.technologies || [g.category],
+            reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release",
+            description: g.description,
+            clientAddress: g.client,
+            status: g.status,
+          }));
+          returnedGigs = liveGigs.length > 0 ? liveGigs : VERIFIED_GIGS;
+        } catch {
+          returnedGigs = VERIFIED_GIGS;
+        }
+        toolResult = returnedGigs;
       } else if (fnName === "search_freelancers") {
-        returnedFreelancers = VERIFIED_FREELANCERS;
-        toolResult = VERIFIED_FREELANCERS;
+        try {
+          const fbRes = await fetch("https://growup-dec3f-default-rtdb.asia-southeast1.firebasedatabase.app/users.json");
+          const data = await fbRes.json();
+          const liveFreelancers = Object.values(data || {})
+            .filter((u: any) => u.role === "freelancer")
+            .map((u: any) => ({
+              id: u.uid || u.walletAddress,
+              name: u.name,
+              handle: "@" + u.name.replace(/\s+/g, '').toLowerCase(),
+              designation: u.skills?.join(", ") || "Freelancer",
+              skills: u.skills || [],
+              reputation: 99.0, // Mocked for now until we query contract
+              tier: "Platform Freelancer",
+              walletAddress: u.walletAddress,
+              milestonesCompleted: 0,
+            }));
+          returnedFreelancers = liveFreelancers.length > 0 ? liveFreelancers : VERIFIED_FREELANCERS;
+        } catch {
+          returnedFreelancers = VERIFIED_FREELANCERS;
+        }
+        toolResult = returnedFreelancers;
       }
 
       // Follow-up completion turn
@@ -154,10 +190,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const isSearchFreelancers = finalAnswer.toLowerCase().includes("search_freelancers");
 
       if (isSearchGigs) {
-        returnedGigs = VERIFIED_GIGS;
+        try {
+          const fbRes = await fetch("https://growup-dec3f-default-rtdb.asia-southeast1.firebasedatabase.app/gigs.json");
+          const data = await fbRes.json();
+          returnedGigs = Object.values(data || {}).map((g: any) => ({
+            id: g.id, title: g.title, budget: g.totalBudget + " tMSTC", escrowPercent: "100%", tags: g.technologies || [g.category], reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release", description: g.description, clientAddress: g.client, status: g.status,
+          }));
+          if (returnedGigs.length === 0) returnedGigs = VERIFIED_GIGS;
+        } catch { returnedGigs = VERIFIED_GIGS; }
         finalAnswer = "Here are the top active gigs currently verified in the Zentrix Escrow on MST Testnet (Chain ID 91562037). All milestones are secured by non-custodial smart contracts with automated review windows:";
       } else if (isSearchFreelancers) {
-        returnedFreelancers = VERIFIED_FREELANCERS;
+        try {
+          const fbRes = await fetch("https://growup-dec3f-default-rtdb.asia-southeast1.firebasedatabase.app/users.json");
+          const data = await fbRes.json();
+          returnedFreelancers = Object.values(data || {}).filter((u: any) => u.role === "freelancer").map((u: any) => ({
+            id: u.uid || u.walletAddress, name: u.name, handle: "@" + u.name.replace(/\s+/g, '').toLowerCase(), designation: u.skills?.join(", ") || "Freelancer", skills: u.skills || [], reputation: 99.0, tier: "Platform Freelancer", walletAddress: u.walletAddress, milestonesCompleted: 0,
+          }));
+          if (returnedFreelancers.length === 0) returnedFreelancers = VERIFIED_FREELANCERS;
+        } catch { returnedFreelancers = VERIFIED_FREELANCERS; }
         finalAnswer = "Here are verified talent profiles indexed on Zentrix with on-chain soulbound credentials on MST Testnet (Chain ID 91562037):";
       } else {
         finalAnswer = finalAnswer.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "").trim() ||
@@ -168,13 +218,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Context-aware fallback
     const promptLower = prompt.toLowerCase();
     if (!returnedGigs && (promptLower.includes("gig") || promptLower.includes("job") || promptLower.includes("project"))) {
-      returnedGigs = VERIFIED_GIGS;
+      try {
+        const fbRes = await fetch("https://growup-dec3f-default-rtdb.asia-southeast1.firebasedatabase.app/gigs.json");
+        const data = await fbRes.json();
+        returnedGigs = Object.values(data || {}).map((g: any) => ({
+          id: g.id, title: g.title, budget: g.totalBudget + " tMSTC", escrowPercent: "100%", tags: g.technologies || [g.category], reviewWindow: (g.reviewWindowHours || 72) + "h Auto-Release", description: g.description, clientAddress: g.client, status: g.status,
+        }));
+        if (returnedGigs.length === 0) returnedGigs = VERIFIED_GIGS;
+      } catch { returnedGigs = VERIFIED_GIGS; }
       if (!finalAnswer || finalAnswer.length < 20) {
         finalAnswer = "Here are the top active gigs currently verified in the Zentrix Escrow on MST Testnet (Chain ID 91562037):";
       }
     }
     if (!returnedFreelancers && (promptLower.includes("freelancer") || promptLower.includes("developer") || promptLower.includes("talent") || promptLower.includes("auditor"))) {
-      returnedFreelancers = VERIFIED_FREELANCERS;
+      try {
+        const fbRes = await fetch("https://growup-dec3f-default-rtdb.asia-southeast1.firebasedatabase.app/users.json");
+        const data = await fbRes.json();
+        returnedFreelancers = Object.values(data || {}).filter((u: any) => u.role === "freelancer").map((u: any) => ({
+          id: u.uid || u.walletAddress, name: u.name, handle: "@" + u.name.replace(/\s+/g, '').toLowerCase(), designation: u.skills?.join(", ") || "Freelancer", skills: u.skills || [], reputation: 99.0, tier: "Platform Freelancer", walletAddress: u.walletAddress, milestonesCompleted: 0,
+        }));
+        if (returnedFreelancers.length === 0) returnedFreelancers = VERIFIED_FREELANCERS;
+      } catch { returnedFreelancers = VERIFIED_FREELANCERS; }
       if (!finalAnswer || finalAnswer.length < 20) {
         finalAnswer = "Here are verified talent profiles indexed on Zentrix with on-chain soulbound credentials on MST Testnet (Chain ID 91562037):";
       }
