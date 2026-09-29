@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useWallet } from "../context/WalletContext";
@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 import { CONTRACT_ADDRESSES, CONTRACT_ABIS, RPC_URL } from "../contracts";
 import { getCachedNFTAssets, scanNFTAssets } from "../lib/nftScanner";
 import { rtdb } from "../lib/firebase";
-import { ref, onValue, set, get, update } from "firebase/database";
+import { ref, onValue, update } from "firebase/database";
 import {
   Award,
   Wallet,
@@ -19,6 +19,19 @@ import {
   Loader2,
   Lock,
   Zap,
+  Briefcase,
+  FileText,
+  Send,
+  Check,
+  XCircle,
+  ArrowRight,
+  ShieldCheck,
+  Layers,
+  ChevronRight,
+  AlertTriangle,
+  PlusCircle,
+  Inbox,
+  UserCheck,
 } from "lucide-react";
 
 interface OnChainMetrics {
@@ -30,56 +43,57 @@ interface OnChainMetrics {
   error: string | null;
 }
 
-export interface DashboardMilestone {
-  id: number;
-  num: number;
-  label: string;
+export interface MilestoneData {
+  title: string;
   amount: string;
-  description: string;
-  status: "pending" | "review" | "approved";
+  deadlineDays?: number;
+  acceptanceCriteria?: string;
+  status?: "pending" | "review" | "approved" | "rejected";
+  cid?: string;
   submittedAt?: string;
   approvedAt?: string;
+  rejectionReason?: string;
 }
 
-const DEFAULT_MILESTONES: DashboardMilestone[] = [
-  {
-    id: 1,
-    num: 1,
-    label: "EIP-1193 Provider Hook & BridgeKey Multi-Sig Integration",
-    amount: "1.0",
-    description: "Connector hook detecting BridgeKey chrome extension and MST chain 91562037.",
-    status: "approved",
-    approvedAt: "2026-09-28 14:32",
-  },
-  {
-    id: 2,
-    num: 2,
-    label: "Milestone Smart Contract Escrow Architecture",
-    amount: "1.5",
-    description: "Non-reentrant multi-party pull custody with auto-release window logic.",
-    status: "review",
-    submittedAt: "2026-09-29 00:15",
-  },
-  {
-    id: 3,
-    num: 3,
-    label: "End-to-End Verification & SBT Minting Hook",
-    amount: "1.0",
-    description: "ZentrixReputation soulbound credential emission upon mentor milestone approval.",
-    status: "pending",
-  },
-];
+export interface ProposalData {
+  id?: string;
+  freelancerAddress: string;
+  freelancerName?: string;
+  proposalText: string;
+  submittedAt: string;
+  status?: "Submitted" | "Accepted" | "Rejected";
+}
 
-const TIER_LABELS: Record<number, string> = {
-  0: "Free",
-  1: "PRO",
-  2: "Enterprise",
-};
+export interface GigData {
+  id: string;
+  title: string;
+  description: string;
+  client: string;
+  totalBudget: string;
+  reviewWindowHours?: number;
+  category?: string;
+  tags?: string[];
+  technologies?: string[];
+  status: "Open" | "Submitted" | "Assigned" | "Active" | "Completed" | "Cancelled";
+  milestones?: MilestoneData[];
+  proposals?: Record<string, ProposalData> | ProposalData[];
+  assignedFreelancer?: string;
+  freelancer?: string;
+  acceptedAt?: string;
+}
+
+interface TxState {
+  hash: string | null;
+  status: "pending" | "confirmed" | "error" | null;
+  action: string;
+  error?: string;
+}
 
 export const DashboardPage: React.FC = () => {
   const { currentRole } = useAuth();
-  const { address, signer, provider, isConnected, connectWallet, openConnectModal } = useWallet();
+  const { address, signer, isConnected, connectWallet, openConnectModal } = useWallet();
 
+  // ── On-chain Metrics ─────────────────────────────────────────────
   const [metrics, setMetrics] = useState<OnChainMetrics>(() => {
     const cachedNft = getCachedNFTAssets(address);
     return {
@@ -92,11 +106,10 @@ export const DashboardPage: React.FC = () => {
     };
   });
 
-  // Hydrate immediately when address becomes available/changes
   useEffect(() => {
     if (address) {
       const cache = getCachedNFTAssets(address);
-      setMetrics(prev => ({
+      setMetrics((prev) => ({
         ...prev,
         passTokenId: cache.passTokenId ? Number(cache.passTokenId) : prev.passTokenId,
         passTier: cache.passTier || prev.passTier,
@@ -105,206 +118,184 @@ export const DashboardPage: React.FC = () => {
     }
   }, [address]);
 
-  const [milestones, setMilestones] = useState<DashboardMilestone[]>(() => {
-    try {
-      const saved = localStorage.getItem("zx_dashboard_milestones");
-      if (saved) return JSON.parse(saved);
-    } catch (_) {}
-    return DEFAULT_MILESTONES;
-  });
-
-  const [milestoneNotice, setMilestoneNotice] = useState<{
-    type: "success" | "info" | "warning" | "error";
-    message: string;
-  } | null>(null);
+  // ── Real RTDB Gigs & Live Subscription ────────────────────────────
+  const [allGigs, setAllGigs] = useState<GigData[]>([]);
+  const [isLoadingGigs, setIsLoadingGigs] = useState<boolean>(true);
 
   useEffect(() => {
-    try {
-      localStorage.setItem("zx_dashboard_milestones", JSON.stringify(milestones));
-    } catch (_) {}
-  }, [milestones]);
-
-  useEffect(() => {
-    const handleMilestonesUpdated = () => {
-      try {
-        const saved = localStorage.getItem("zx_dashboard_milestones");
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-             setMilestones(parsed);
+    const gigsRef = ref(rtdb, "gigs");
+    setIsLoadingGigs(true);
+    const unsubscribe = onValue(
+      gigsRef,
+      (snapshot) => {
+        setIsLoadingGigs(false);
+        if (snapshot.exists()) {
+          const val = snapshot.val();
+          let list: GigData[] = [];
+          if (Array.isArray(val)) {
+            list = val.filter(Boolean);
+          } else if (typeof val === "object" && val !== null) {
+            list = Object.values(val);
           }
+          setAllGigs(list);
+        } else {
+          setAllGigs([]);
         }
-      } catch (_) {}
-    };
-    window.addEventListener("zx_milestones_updated", handleMilestonesUpdated);
-    window.addEventListener("storage", handleMilestonesUpdated);
-    return () => {
-      window.removeEventListener("zx_milestones_updated", handleMilestonesUpdated);
-      window.removeEventListener("storage", handleMilestonesUpdated);
-    };
+      },
+      (err) => {
+        console.error("Failed to load RTDB gigs", err);
+        setIsLoadingGigs(false);
+      }
+    );
+    return () => unsubscribe();
   }, []);
 
-  const [activeTab, setActiveTab] = useState<"overview" | "milestones" | "reputation" | "proposals">("overview");
-  const [clientGigs, setClientGigs] = useState<any[]>([]);
-  const [withdrawing, setWithdrawing] = useState(false);
-  const [txHash, setTxHash] = useState<string | null>(null);
-  const [txStatus, setTxStatus] = useState<"pending" | "confirmed" | null>(null);
-  const [withdrawFeedback, setWithdrawFeedback] = useState<{ type: "error" | "info" | "warning"; msg: string } | null>(null);
+  // ── Tab & UI State ────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<"overview" | "milestones" | "proposals" | "reputation">("overview");
+  const [milestoneFilter, setMilestoneFilter] = useState<"all" | "active" | "open" | "completed">("all");
 
-  // Freelancer submits milestone for review
-  const handleSubmitForReview = async (num: number) => {
-    setMilestoneNotice(null);
-    try {
-      if (!signer) throw new Error("Wallet not connected");
-      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
-      
-      setMilestoneNotice({ type: "success", message: "Transaction pending on MST Testnet..." });
-      const tx = await escrow.submitMilestone(
-        1, // mock gigId since we rely on localStorage
-        num - 1, // index
-        "QmMockedEvidenceCID"
-      );
-      await tx.wait();
+  // Interactive inputs for deliverable submissions
+  const [submissionInputs, setSubmissionInputs] = useState<Record<string, string>>({});
+  // Rejection modal state
+  const [rejectionModal, setRejectionModal] = useState<{
+    gigId: string;
+    milestoneIndex: number;
+    title: string;
+  } | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
 
-      setMilestones((prev) =>
-        prev.map((m) => {
-          if (m.num === num) {
-            if (m.status === "approved") return m;
-            return {
-              ...m,
-              status: "review",
-              submittedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            };
+  // Transaction Status Banner state (Hard Rule 8)
+  const [txState, setTxState] = useState<TxState | null>(null);
+  const [isProcessingAction, setIsProcessingAction] = useState<boolean>(false);
+
+  // Helper to extract clean proposals list
+  const getProposalsList = useCallback((gig: GigData): ProposalData[] => {
+    if (!gig.proposals) return [];
+    if (Array.isArray(gig.proposals)) return gig.proposals.filter(Boolean);
+    return Object.values(gig.proposals);
+  }, []);
+
+  // ── Derived Data for Connected User ───────────────────────────────
+  const userAddr = (address || "").toLowerCase();
+
+  // Client's created gigs
+  const clientGigs = useMemo(() => {
+    if (!userAddr) return [];
+    return allGigs.filter((g) => g.client?.toLowerCase() === userAddr);
+  }, [allGigs, userAddr]);
+
+  // Freelancer's assigned or active gigs
+  const freelancerGigs = useMemo(() => {
+    if (!userAddr) return [];
+    return allGigs.filter(
+      (g) =>
+        g.freelancer?.toLowerCase() === userAddr ||
+        g.assignedFreelancer?.toLowerCase() === userAddr
+    );
+  }, [allGigs, userAddr]);
+
+  // Relevant gigs based on current active role
+  const userRelevantGigs = useMemo(() => {
+    return currentRole === "client" ? clientGigs : freelancerGigs;
+  }, [currentRole, clientGigs, freelancerGigs]);
+
+  // Proposals received (Client view)
+  const receivedProposals = useMemo(() => {
+    const list: { gig: GigData; proposal: ProposalData }[] = [];
+    clientGigs.forEach((gig) => {
+      const props = getProposalsList(gig);
+      props.forEach((prop) => {
+        list.push({ gig, proposal: prop });
+      });
+    });
+    return list;
+  }, [clientGigs, getProposalsList]);
+
+  // Proposals submitted (Freelancer view)
+  const mySubmittedProposals = useMemo(() => {
+    if (!userAddr) return [];
+    const list: { gig: GigData; proposal: ProposalData }[] = [];
+    allGigs.forEach((gig) => {
+      const props = getProposalsList(gig);
+      props.forEach((prop) => {
+        if (prop.freelancerAddress?.toLowerCase() === userAddr) {
+          list.push({ gig, proposal: prop });
+        }
+      });
+    });
+    return list;
+  }, [allGigs, userAddr, getProposalsList]);
+
+  // User Stats
+  const stats = useMemo(() => {
+    if (currentRole === "client") {
+      const inEscrow = clientGigs.reduce((acc, g) => acc + (parseFloat(g.totalBudget) || 0), 0);
+      const activeCount = clientGigs.filter((g) => g.status === "Active" || g.status === "Assigned").length;
+      const completedCount = clientGigs.filter((g) => g.status === "Completed").length;
+      const pendingReviewsCount = clientGigs.reduce((acc, g) => {
+        if (g.milestones) {
+          return acc + g.milestones.filter((m) => m.status === "review").length;
+        }
+        return acc;
+      }, 0);
+      return {
+        totalGigs: clientGigs.length,
+        inEscrow: inEscrow.toFixed(2),
+        activeCount,
+        completedCount,
+        pendingReviewsCount,
+        proposalsCount: receivedProposals.length,
+      };
+    } else {
+      const potentialEarnings = freelancerGigs.reduce((acc, g) => acc + (parseFloat(g.totalBudget) || 0), 0);
+      const activeCount = freelancerGigs.filter((g) => g.status === "Active").length;
+      const assignedCount = freelancerGigs.filter((g) => g.status === "Assigned").length;
+      const completedCount = freelancerGigs.filter((g) => g.status === "Completed").length;
+      return {
+        totalGigs: freelancerGigs.length,
+        potentialEarnings: potentialEarnings.toFixed(2),
+        activeCount,
+        assignedCount,
+        completedCount,
+        proposalsCount: mySubmittedProposals.length,
+      };
+    }
+  }, [currentRole, clientGigs, freelancerGigs, receivedProposals, mySubmittedProposals]);
+
+  // High-priority active milestone needing immediate user attention
+  const priorityActionMilestone = useMemo(() => {
+    for (const gig of userRelevantGigs) {
+      if (gig.status === "Active" && gig.milestones) {
+        for (let i = 0; i < gig.milestones.length; i++) {
+          const m = gig.milestones[i];
+          const st = m.status || "pending";
+          if (currentRole === "client" && st === "review") {
+            return { gig, milestone: m, index: i, type: "review_needed" as const };
           }
-          return m;
-        })
-      );
-      setMilestoneNotice({ type: "success", message: `Milestone #${num} deliverable anchored on-chain!` });
-    } catch(err: any) {
-      setMilestoneNotice({ type: "error", message: err.message || "Transaction failed" });
-    }
-  };
-
-  // Client/Mentor approves milestone (Immutable - cannot be reverted!)
-  const handleApproveMilestone = async (num: number) => {
-    setMilestoneNotice(null);
-    try {
-      if (!signer) throw new Error("Wallet not connected");
-      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
-      
-      setMilestoneNotice({ type: "success", message: "Transaction pending on MST Testnet..." });
-      const tx = await escrow.approveMilestone(
-        1, // mock gigId
-        num - 1, // index
-        5 // rating out of 5
-      );
-      await tx.wait();
-
-      setMilestones((prev) =>
-        prev.map((m) => {
-          if (m.num === num) {
-            if (m.status === "approved") return m;
-            return {
-              ...m,
-              status: "approved",
-              approvedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            };
+          if (currentRole === "freelancer" && (st === "pending" || st === "rejected")) {
+            return { gig, milestone: m, index: i, type: "deliverable_due" as const };
           }
-          return m;
-        })
-      );
-      setMilestoneNotice({ type: "success", message: `Milestone #${num} approved! Funds released on-chain!` });
-    } catch(err: any) {
-      setMilestoneNotice({ type: "error", message: err.message || "Transaction failed" });
-    }
-  };
-
-  const [submissionCid, setSubmissionCid] = useState("");
-
-  const submitRealMilestone = async (gigId: string, milestoneIndex: number, cid: string) => {
-    setMilestoneNotice(null);
-    try {
-      if (!signer) throw new Error("Wallet not connected");
-      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
-      const onChainGigId = parseInt(gigId) || 1;
-      const tx = await escrow.submitMilestone(onChainGigId, milestoneIndex, cid);
-      setMilestoneNotice({ type: "info", message: "Transaction pending..." });
-      await tx.wait();
-      await update(ref(rtdb, `gigs/${gigId}/milestones/${milestoneIndex}`), { status: 'review', cid });
-      setMilestoneNotice({ type: "success", message: "Work submitted successfully!" });
-      setSubmissionCid("");
-    } catch(err: any) {
-      setMilestoneNotice({ type: "error", message: err.message || "Transaction failed" });
-    }
-  };
-
-  const approveRealMilestone = async (gigId: string, milestoneIndex: number, milestonesCount: number) => {
-    setMilestoneNotice(null);
-    try {
-      if (!signer) throw new Error("Wallet not connected");
-      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
-      const onChainGigId = parseInt(gigId) || 1;
-      const tx = await escrow.approveMilestone(onChainGigId, milestoneIndex, 5);
-      setMilestoneNotice({ type: "info", message: "Transaction pending..." });
-      await tx.wait();
-
-      await update(ref(rtdb, `gigs/${gigId}/milestones/${milestoneIndex}`), { status: 'approved' });
-
-      // If all milestones are approved, set gig to Completed. (Here checking if it's the last one for simplicity)
-      if (milestoneIndex === milestonesCount - 1) {
-         await update(ref(rtdb, `gigs/${gigId}`), { status: 'Completed' });
-      }
-      setMilestoneNotice({ type: "success", message: "Work approved & Funds Released!" });
-    } catch (err: any) {
-      setMilestoneNotice({ type: "error", message: err.message || "Transaction failed" });
-    }
-  };
-
-  // Find active milestone for Overview card
-  const activeMilestone =
-    milestones.find((m) => m.status !== "approved") || milestones[milestones.length - 1];
-
-  const [activeGigs, setActiveGigs] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (!address) return;
-    const gigsRef = ref(rtdb, 'gigs');
-    const unsubscribe = onValue(gigsRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        const allGigs: any[] = Object.values(data);
-
-        if (currentRole === "client") {
-          const myGigs = allGigs.filter((g) => g.client?.toLowerCase() === address.toLowerCase());
-          setClientGigs(myGigs);
-          setActiveGigs(myGigs.filter(g => g.status === 'Assigned' || g.status === 'Active' || g.status === 'Completed'));
-        } else {
-          setActiveGigs(allGigs.filter(g => g.freelancer?.toLowerCase() === address.toLowerCase() && (g.status === 'Assigned' || g.status === 'Active' || g.status === 'Completed')));
         }
       }
-    });
-    return () => unsubscribe();
-  }, [address, currentRole]);
-
-  const handleAssign = async (gigId: string, freelancerAddress: string) => {
-    if (!signer) return;
-    try {
-      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
-      // Ensure gigId is a number or parseable. Assuming onChainGigId is an integer string
-      const tx = await escrow.assignAndFund(parseInt(gigId) || 1, freelancerAddress, ethers.ZeroHash, "");
-      await tx.wait();
-      
-      await update(ref(rtdb, `gigs/${gigId}`), { status: 'Assigned', freelancer: freelancerAddress });
-      alert("Freelancer Assigned Successfully!");
-    } catch(e: any) {
-      alert("Error: " + e.message);
     }
-  };
+    // Secondary check: assigned gig waiting for freelancer acceptance
+    if (currentRole === "freelancer") {
+      const assignedGig = freelancerGigs.find((g) => g.status === "Assigned");
+      if (assignedGig) {
+        return {
+          gig: assignedGig,
+          milestone: assignedGig.milestones?.[0] || { title: "Gig Assignment", amount: assignedGig.totalBudget },
+          index: 0,
+          type: "accept_assignment" as const,
+        };
+      }
+    }
+    return null;
+  }, [userRelevantGigs, freelancerGigs, currentRole]);
 
-  // ── Fetch on-chain data ─────────────────────────────────────────
+  // ── Fetch On-chain Metrics ────────────────────────────────────────
   const fetchMetrics = useCallback(async () => {
     if (!address) return;
-
     setMetrics((m) => ({ ...m, loading: true, error: null }));
     try {
       const readProvider = new ethers.JsonRpcProvider(RPC_URL);
@@ -314,24 +305,18 @@ export const DashboardPage: React.FC = () => {
         readProvider
       );
 
-      // Withdrawable balance from escrow
       let withdrawable = "0";
       try {
         const raw = await escrow.withdrawable(address);
         withdrawable = ethers.formatEther(raw);
-      } catch (_) { /* address has no balance yet */ }
+      } catch (_) {}
 
-      // Deep scan all on-chain NFT assets (Passes, Events, SBTs)
       const scan = await scanNFTAssets(address);
-      const passTier = scan.passTier ?? 0;
-      const passTokenId = scan.passTokenId ? Number(scan.passTokenId) : null;
-      const reputationTokenCount = scan.reputationCount;
-
       setMetrics({
         withdrawable,
-        passTokenId,
-        passTier,
-        reputationTokenCount,
+        passTokenId: scan.passTokenId ? Number(scan.passTokenId) : null,
+        passTier: scan.passTier ?? 0,
+        reputationTokenCount: scan.reputationCount,
         loading: false,
         error: null,
       });
@@ -344,80 +329,355 @@ export const DashboardPage: React.FC = () => {
     if (isConnected) fetchMetrics();
   }, [isConnected, fetchMetrics]);
 
-  // Periodic background re-scan to keep assets fresh on reload and live updates
   useEffect(() => {
     if (address) {
       scanNFTAssets(address).catch(() => {});
       const interval = setInterval(() => {
         scanNFTAssets(address).catch(() => {});
-      }, 12000);
+      }, 15000);
       return () => clearInterval(interval);
     }
   }, [address]);
 
-  useEffect(() => {
-    const onScanned = (e: any) => {
-      const d = e.detail;
-      if (d) {
-        setMetrics((m) => ({
-          ...m,
-          passTier: typeof d.passTier === "number" ? d.passTier : m.passTier,
-          passTokenId: d.passTokenId ? Number(d.passTokenId) : m.passTokenId,
-          reputationTokenCount: d.reputationCount ?? m.reputationTokenCount,
-        }));
-      }
-    };
-    window.addEventListener("zx_nft_scanned", onScanned);
-    return () => window.removeEventListener("zx_nft_scanned", onScanned);
-  }, []);
+  // ── Action Handlers (Hard Rule 8 Compliant) ───────────────────────
 
-  // ── Pull withdraw ────────────────────────────────────────────────
+  // 1. Pull Withdraw Escrow Funds
   const handleWithdraw = async () => {
-    setWithdrawFeedback(null);
-    if (!isConnected || !signer) { connectWallet(); return; }
-    if (parseFloat(metrics.withdrawable) <= 0) {
-      setWithdrawFeedback({ type: "info", msg: "No withdrawable balance currently on this address." });
+    if (!isConnected || !signer) {
+      connectWallet();
       return;
     }
-    setWithdrawing(true);
-    setTxHash(null);
-    setTxStatus("pending");
+    if (parseFloat(metrics.withdrawable) <= 0) return;
+
+    setIsProcessingAction(true);
+    setTxState({
+      hash: null,
+      status: "pending",
+      action: "Initiating pull withdraw on MST Testnet...",
+    });
+
     try {
-      const escrow = new ethers.Contract(
-        CONTRACT_ADDRESSES.ZentrixEscrow,
-        CONTRACT_ABIS.ZentrixEscrow,
-        signer
-      );
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
       const tx = await escrow.withdraw();
-      setTxHash(tx.hash);
+      setTxState({
+        hash: tx.hash,
+        status: "pending",
+        action: "Confirming withdraw transaction on MST Testnet...",
+      });
       await tx.wait();
-      setTxStatus("confirmed");
-      await fetchMetrics(); // refresh after withdrawal
+      setTxState({
+        hash: tx.hash,
+        status: "confirmed",
+        action: "Withdrawal completed successfully! Funds transferred to your wallet.",
+      });
+      await fetchMetrics();
     } catch (err: any) {
-      setWithdrawFeedback({ type: "warning", msg: err?.reason ?? err?.message ?? "Withdrawal transaction failed or was rejected." });
-      setTxStatus(null);
+      setTxState({
+        hash: null,
+        status: "error",
+        action: "Withdrawal failed",
+        error: err?.reason || err?.message || "Transaction was rejected or reverted.",
+      });
     } finally {
-      setWithdrawing(false);
+      setIsProcessingAction(false);
+    }
+  };
+
+  // 2. Client assigns freelancer and funds/locks agreement
+  const handleAssignFreelancer = async (gigId: string, freelancerAddress: string) => {
+    if (!isConnected || !signer) {
+      openConnectModal();
+      return;
+    }
+
+    setIsProcessingAction(true);
+    setTxState({
+      hash: null,
+      status: "pending",
+      action: `Assigning freelancer ${freelancerAddress.slice(0, 6)}... on-chain...`,
+    });
+
+    try {
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      const onChainGigId = parseInt(gigId) || 1;
+      const tx = await escrow.assignAndFund(onChainGigId, freelancerAddress, ethers.ZeroHash, "");
+      setTxState({
+        hash: tx.hash,
+        status: "pending",
+        action: "Confirming freelancer assignment on MST Testnet...",
+      });
+      await tx.wait();
+
+      // Update Firebase RTDB
+      await update(ref(rtdb, `gigs/${gigId}`), {
+        status: "Assigned",
+        freelancer: freelancerAddress.toLowerCase(),
+        assignedFreelancer: freelancerAddress.toLowerCase(),
+      });
+      await update(ref(rtdb, `gigs/${gigId}/proposals/${freelancerAddress}`), {
+        status: "Accepted",
+      });
+
+      setTxState({
+        hash: tx.hash,
+        status: "confirmed",
+        action: `Freelancer successfully assigned on-chain! Escrow locked.`,
+      });
+    } catch (err: any) {
+      setTxState({
+        hash: null,
+        status: "error",
+        action: "Assignment failed",
+        error: err?.reason || err?.message || "Transaction was rejected or reverted.",
+      });
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  // 3. Freelancer accepts assignment
+  const handleAcceptAssignment = async (gigId: string) => {
+    if (!isConnected || !signer) {
+      openConnectModal();
+      return;
+    }
+
+    setIsProcessingAction(true);
+    setTxState({
+      hash: null,
+      status: "pending",
+      action: "Accepting project assignment on-chain...",
+    });
+
+    try {
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      const onChainGigId = parseInt(gigId) || 1;
+      const tx = await escrow.acceptAssignment(onChainGigId);
+      setTxState({
+        hash: tx.hash,
+        status: "pending",
+        action: "Confirming acceptance on MST Testnet...",
+      });
+      await tx.wait();
+
+      await update(ref(rtdb, `gigs/${gigId}`), {
+        status: "Active",
+        acceptedAt: new Date().toISOString(),
+      });
+
+      setTxState({
+        hash: tx.hash,
+        status: "confirmed",
+        action: "Assignment accepted! Agreement is now Active. You may begin deliverable work.",
+      });
+    } catch (err: any) {
+      setTxState({
+        hash: null,
+        status: "error",
+        action: "Acceptance failed",
+        error: err?.reason || err?.message || "Transaction was rejected or reverted.",
+      });
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  // 4. Freelancer submits deliverable for review
+  const handleSubmitMilestone = async (gigId: string, milestoneIndex: number) => {
+    if (!isConnected || !signer) {
+      openConnectModal();
+      return;
+    }
+
+    const key = `${gigId}-${milestoneIndex}`;
+    const evidenceCid = (submissionInputs[key] || "").trim();
+    if (!evidenceCid) {
+      setTxState({
+        hash: null,
+        status: "error",
+        action: "Deliverable evidence required",
+        error: "Please enter an IPFS CID, GitHub link, or deliverable proof before submitting.",
+      });
+      return;
+    }
+
+    setIsProcessingAction(true);
+    setTxState({
+      hash: null,
+      status: "pending",
+      action: `Anchoring deliverable proof on-chain for Milestone #${milestoneIndex + 1}...`,
+    });
+
+    try {
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      const onChainGigId = parseInt(gigId) || 1;
+      const tx = await escrow.submitMilestone(onChainGigId, milestoneIndex, evidenceCid);
+      setTxState({
+        hash: tx.hash,
+        status: "pending",
+        action: "Confirming deliverable submission on MST Testnet...",
+      });
+      await tx.wait();
+
+      await update(ref(rtdb, `gigs/${gigId}/milestones/${milestoneIndex}`), {
+        status: "review",
+        cid: evidenceCid,
+        submittedAt: new Date().toLocaleString(),
+      });
+
+      // Clear input
+      setSubmissionInputs((prev) => ({ ...prev, [key]: "" }));
+
+      setTxState({
+        hash: tx.hash,
+        status: "confirmed",
+        action: `Milestone #${milestoneIndex + 1} deliverable submitted! Client review window is active.`,
+      });
+    } catch (err: any) {
+      setTxState({
+        hash: null,
+        status: "error",
+        action: "Submission failed",
+        error: err?.reason || err?.message || "Transaction was rejected or reverted.",
+      });
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  // 5. Client approves milestone deliverable
+  const handleApproveMilestone = async (gigId: string, milestoneIndex: number, totalMilestones: number) => {
+    if (!isConnected || !signer) {
+      openConnectModal();
+      return;
+    }
+
+    setIsProcessingAction(true);
+    setTxState({
+      hash: null,
+      status: "pending",
+      action: `Approving Milestone #${milestoneIndex + 1} and releasing escrow on-chain...`,
+    });
+
+    try {
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      const onChainGigId = parseInt(gigId) || 1;
+      // 5-star rating by default
+      const tx = await escrow.approveMilestone(onChainGigId, milestoneIndex, 5);
+      setTxState({
+        hash: tx.hash,
+        status: "pending",
+        action: "Confirming milestone approval on MST Testnet...",
+      });
+      await tx.wait();
+
+      await update(ref(rtdb, `gigs/${gigId}/milestones/${milestoneIndex}`), {
+        status: "approved",
+        approvedAt: new Date().toLocaleString(),
+      });
+
+      // If last milestone, complete gig
+      if (milestoneIndex === totalMilestones - 1) {
+        await update(ref(rtdb, `gigs/${gigId}`), { status: "Completed" });
+      }
+
+      setTxState({
+        hash: tx.hash,
+        status: "confirmed",
+        action: `Milestone #${milestoneIndex + 1} approved! Escrow payment released to freelancer.`,
+      });
+      await fetchMetrics();
+    } catch (err: any) {
+      setTxState({
+        hash: null,
+        status: "error",
+        action: "Approval failed",
+        error: err?.reason || err?.message || "Transaction was rejected or reverted.",
+      });
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  // 6. Client requests revision / rejects milestone deliverable
+  const handleRejectMilestone = async () => {
+    if (!rejectionModal) return;
+    const { gigId, milestoneIndex } = rejectionModal;
+
+    if (!isConnected || !signer) {
+      openConnectModal();
+      return;
+    }
+
+    const reason = rejectionReason.trim() || "Revision requested on deliverable.";
+
+    setIsProcessingAction(true);
+    setTxState({
+      hash: null,
+      status: "pending",
+      action: `Requesting revisions on-chain for Milestone #${milestoneIndex + 1}...`,
+    });
+
+    try {
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      const onChainGigId = parseInt(gigId) || 1;
+      const tx = await escrow.rejectMilestone(onChainGigId, milestoneIndex, reason);
+      setTxState({
+        hash: tx.hash,
+        status: "pending",
+        action: "Confirming revision request on MST Testnet...",
+      });
+      await tx.wait();
+
+      await update(ref(rtdb, `gigs/${gigId}/milestones/${milestoneIndex}`), {
+        status: "rejected",
+        rejectionReason: reason,
+      });
+
+      setRejectionModal(null);
+      setRejectionReason("");
+
+      setTxState({
+        hash: tx.hash,
+        status: "confirmed",
+        action: `Revision request recorded on-chain. Freelancer notified to re-submit work.`,
+      });
+    } catch (err: any) {
+      setTxState({
+        hash: null,
+        status: "error",
+        action: "Revision request failed",
+        error: err?.reason || err?.message || "Transaction was rejected or reverted.",
+      });
+    } finally {
+      setIsProcessingAction(false);
     }
   };
 
   // ── Not connected guard ──────────────────────────────────────────
   if (!address && !isConnected) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-6 text-center">
-        <div className="w-16 h-16 rounded-3xl flex items-center justify-center"
-          style={{ background: "var(--zx-surface-alt)" }}>
+      <div className="flex flex-col items-center justify-center min-h-[55vh] gap-6 text-center max-w-md mx-auto px-4">
+        <div
+          className="w-16 h-16 rounded-3xl flex items-center justify-center shadow-sm"
+          style={{ background: "var(--zx-surface-alt)", border: "1px solid var(--zx-border)" }}
+        >
           <Wallet className="w-8 h-8" style={{ color: "var(--zx-primary-deep)" }} />
         </div>
         <div className="space-y-2">
-          <h2 className="text-2xl font-black" style={{ color: "var(--zx-ink)" }}>Connect Your Wallet</h2>
-          <p className="text-sm" style={{ color: "var(--zx-muted)" }}>
-            Connect BridgeKey to see your real on-chain escrow balance, pass tier, and reputation.
+          <h2 className="text-2xl font-black" style={{ color: "var(--zx-ink)" }}>
+            Connect Your Wallet
+          </h2>
+          <p className="text-sm leading-relaxed" style={{ color: "var(--zx-muted)" }}>
+            Connect your BridgeKey or Web3 wallet to access your live on-chain escrow agreements, track deliverables, and manage payments on MST Testnet.
           </p>
         </div>
-        <button onClick={openConnectModal}
-          className="inline-flex items-center gap-2 font-bold rounded-2xl px-6 py-3 text-sm shadow-md"
-          style={{ background: "var(--zx-primary-deep)", color: "var(--zx-cream)" }}>
+        <button
+          onClick={openConnectModal}
+          className="inline-flex items-center gap-2 font-bold rounded-2xl px-6 py-3 text-sm shadow-md hover:opacity-90 transition-all cursor-pointer"
+          style={{ background: "var(--zx-primary-deep)", color: "var(--zx-cream)" }}
+        >
+          <Wallet className="w-4 h-4" />
           Connect Wallet
         </button>
       </div>
@@ -425,152 +685,196 @@ export const DashboardPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* ── Header ──────────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4"
-        style={{ borderBottom: "1px solid var(--zx-border)" }}>
+      <div
+        className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4"
+        style={{ borderBottom: "1px solid var(--zx-border)" }}
+      >
         <div>
-          <h1 className="text-3xl font-black" style={{ color: "var(--zx-ink)" }}>Dashboard</h1>
-          <p className="text-sm mt-1 font-mono" style={{ color: "var(--zx-muted)" }}>
-            {address?.slice(0, 8)}...{address?.slice(-6)}
-          </p>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-black" style={{ color: "var(--zx-ink)" }}>
+              Dashboard
+            </h1>
+            <span
+              className="text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-full border"
+              style={{
+                background: "var(--zx-surface-alt)",
+                borderColor: "var(--zx-border)",
+                color: "var(--zx-muted)",
+              }}
+            >
+              MST Testnet (91562037)
+            </span>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-xs font-mono" style={{ color: "var(--zx-muted)" }}>
+              {address}
+            </p>
+            <a
+              href={`https://testnet.mstscan.com/address/${address}`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs hover:underline flex items-center gap-0.5 font-bold"
+              style={{ color: "var(--zx-primary-deep)" }}
+              title="View on MSTScan"
+            >
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
         </div>
 
-        {/* Read-only Role Display - Shifting is restricted to Profile Settings */}
-        <div
-          className="flex items-center gap-2 px-3.5 py-2 rounded-2xl border text-xs shadow-xs"
-          style={{ background: "var(--zx-surface)", borderColor: "var(--zx-border)" }}
-        >
-          <span className="font-mono text-[var(--zx-muted)]">Active Role:</span>
-          <span
-            className="font-bold capitalize px-2.5 py-0.5 rounded-lg border text-[11px]"
-            style={{
-              background: "var(--zx-surface-alt)",
-              borderColor: "var(--zx-border)",
-              color: "var(--zx-primary-deep)",
-            }}
+        {/* Role & Quick Link */}
+        <div className="flex items-center gap-3">
+          <div
+            className="flex items-center gap-2 px-3.5 py-2 rounded-2xl border text-xs shadow-xs"
+            style={{ background: "var(--zx-surface)", borderColor: "var(--zx-border)" }}
           >
-            {currentRole}
-          </span>
+            <span className="font-mono text-[var(--zx-muted)]">Active Role:</span>
+            <span
+              className="font-bold capitalize px-2.5 py-0.5 rounded-lg border text-[11px]"
+              style={{
+                background: "var(--zx-surface-alt)",
+                borderColor: "var(--zx-border)",
+                color: "var(--zx-primary-deep)",
+              }}
+            >
+              {currentRole}
+            </span>
+            <Link
+              to="/profile"
+              className="font-semibold underline ml-1 hover:opacity-80 transition-opacity text-[11px]"
+              style={{ color: "var(--zx-primary-deep)" }}
+              title="Change role in profile settings"
+            >
+              Change →
+            </Link>
+          </div>
+
           <Link
-            to="/profile"
-            className="font-semibold underline ml-1 hover:opacity-80 transition-opacity flex items-center gap-1"
-            style={{ color: "var(--zx-primary-deep)" }}
-            title="Role can only be changed in Profile Settings"
+            to="/marketplace"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl border text-xs font-bold transition-all shadow-xs hover:bg-[var(--zx-surface-alt)]"
+            style={{ borderColor: "var(--zx-border)", color: "var(--zx-ink)" }}
           >
-            Change in Profile →
+            <Briefcase className="w-3.5 h-3.5" />
+            <span>Marketplace</span>
           </Link>
         </div>
       </div>
 
-      {/* Milestone action notice */}
-      {milestoneNotice && (
+      {/* ── Transaction Status Banner (Hard Rule 8) ────────────────── */}
+      {txState && (
         <div
-          className="flex items-center justify-between p-4 rounded-2xl text-xs font-semibold shadow-xs animate-in fade-in duration-200"
+          className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl text-xs font-semibold shadow-xs animate-in fade-in duration-200"
           style={{
             background:
-              milestoneNotice.type === "success"
-                ? "rgba(47, 125, 79, 0.1)"
-                : "rgba(216, 64, 64, 0.08)",
+              txState.status === "confirmed"
+                ? "rgba(22, 163, 74, 0.1)"
+                : txState.status === "error"
+                ? "rgba(163, 4, 2, 0.08)"
+                : "rgba(217, 119, 6, 0.1)",
             border: `1px solid ${
-              milestoneNotice.type === "success" ? "var(--zx-success)" : "var(--zx-primary)"
+              txState.status === "confirmed"
+                ? "var(--zx-success)"
+                : txState.status === "error"
+                ? "var(--zx-danger)"
+                : "var(--zx-warning)"
             }`,
             color:
-              milestoneNotice.type === "success" ? "var(--zx-success)" : "var(--zx-primary-deep)",
+              txState.status === "confirmed"
+                ? "var(--zx-success)"
+                : txState.status === "error"
+                ? "var(--zx-danger)"
+                : "var(--zx-warning)",
           }}
         >
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{milestoneNotice.message}</span>
+          <div className="flex items-center gap-2.5">
+            {txState.status === "confirmed" ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            ) : txState.status === "error" ? (
+              <AlertCircle className="w-4 h-4 shrink-0" />
+            ) : (
+              <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+            )}
+            <div className="space-y-0.5">
+              <span className="font-bold">{txState.action}</span>
+              {txState.error && <p className="text-[11px] opacity-90 font-mono">{txState.error}</p>}
+            </div>
           </div>
-          <button
-            onClick={() => setMilestoneNotice(null)}
-            className="text-xs font-bold underline hover:opacity-80 ml-4 cursor-pointer"
-          >
-            Dismiss
-          </button>
+
+          <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+            {txState.hash && (
+              <a
+                href={`https://testnet.mstscan.com/tx/${txState.hash}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 font-bold underline hover:opacity-80"
+              >
+                <span>MSTScan Tx</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+            <button
+              onClick={() => setTxState(null)}
+              className="text-xs font-bold underline hover:opacity-80 cursor-pointer ml-1"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
-      {/* ── Tx status banner (Hard Rule 8) ───────────────────────────── */}
-      {txHash && (
-        <div className="flex items-center justify-between gap-4 p-4 rounded-2xl text-xs font-semibold"
-          style={{
-            background: txStatus === "confirmed"
-              ? "rgba(47,125,79,0.1)" : "rgba(216,64,64,0.08)",
-            border: `1px solid ${txStatus === "confirmed" ? "var(--zx-success)" : "var(--zx-primary)"}`,
-          }}>
-          <div className="flex items-center gap-2">
-            {txStatus === "confirmed"
-              ? <CheckCircle2 className="w-4 h-4" style={{ color: "var(--zx-success)" }} />
-              : <Loader2 className="w-4 h-4 animate-spin" style={{ color: "var(--zx-primary)" }} />
-            }
-            <span style={{ color: "var(--zx-ink)" }}>
-              {txStatus === "confirmed" ? "Withdrawal confirmed" : "Transaction pending..."}
-              {" "}— {txHash.slice(0, 10)}...{txHash.slice(-8)}
-            </span>
-          </div>
-          <a href={`https://testnet.mstscan.com/tx/${txHash}`} target="_blank" rel="noreferrer"
-            className="flex items-center gap-1 font-bold hover:underline"
-            style={{ color: "var(--zx-primary-deep)" }}>
-            MSTScan <ExternalLink className="w-3 h-3" />
-          </a>
-        </div>
-      )}
-
-      {/* Withdraw Notice / Feedback */}
-      {withdrawFeedback && (
+      {/* ── Bento Metrics ───────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Withdrawable / Escrow balance */}
         <div
-          className="flex items-center justify-between p-4 rounded-2xl text-xs font-semibold shadow-sm animate-in fade-in duration-200"
-          style={{
-            background: withdrawFeedback.type === "error" ? "rgba(163, 4, 2, 0.08)" : "rgba(30, 41, 59, 0.05)",
-            border: `1px solid ${withdrawFeedback.type === "error" ? "var(--zx-primary)" : "var(--zx-border)"}`,
-            color: withdrawFeedback.type === "error" ? "var(--zx-primary-deep)" : "var(--zx-ink)",
-          }}
-        >
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{withdrawFeedback.msg}</span>
-          </div>
-          <button
-            onClick={() => setWithdrawFeedback(null)}
-            className="text-xs font-bold underline hover:opacity-80 ml-4"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {/* ── Bento metrics ───────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {/* Withdrawable balance */}
-        <div className="rounded-3xl p-6 space-y-3 relative overflow-hidden shadow-xs"
+          className="rounded-3xl p-6 space-y-3 relative overflow-hidden shadow-xs"
           style={{
             background: "linear-gradient(135deg, var(--zx-surface) 0%, var(--zx-surface-alt) 100%)",
             border: "2px solid var(--zx-primary)",
-          }}>
-          <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full opacity-10"
-            style={{ background: "var(--zx-primary)", filter: "blur(20px)" }} />
-          <div className="text-xs font-bold uppercase tracking-wide text-[var(--zx-primary-deep)]">
-            {currentRole === "client" ? "Locked in Escrow" : "Available to Withdraw"}
+          }}
+        >
+          <div
+            className="absolute -right-6 -top-6 w-24 h-24 rounded-full opacity-10"
+            style={{ background: "var(--zx-primary)", filter: "blur(20px)" }}
+          />
+          <div className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--zx-primary-deep)" }}>
+            {currentRole === "client" ? "Withdrawable / Refunded Balance" : "Available to Withdraw"}
           </div>
-          <div className="text-4xl font-black font-mono text-[var(--zx-ink)]">
-            {metrics.loading
-              ? <Loader2 className="w-8 h-8 animate-spin inline text-[var(--zx-primary)]" />
-              : <>{parseFloat(metrics.withdrawable).toFixed(4)} <span className="text-lg opacity-60 text-[var(--zx-muted)]">tMSTC</span></>
-            }
+          <div className="text-4xl font-black font-mono" style={{ color: "var(--zx-ink)" }}>
+            {metrics.loading ? (
+              <Loader2 className="w-8 h-8 animate-spin inline" style={{ color: "var(--zx-primary)" }} />
+            ) : (
+              <>
+                {parseFloat(metrics.withdrawable).toFixed(4)}{" "}
+                <span className="text-lg opacity-60" style={{ color: "var(--zx-muted)" }}>
+                  tMSTC
+                </span>
+              </>
+            )}
           </div>
-          {currentRole === "freelancer" && (
-            <button onClick={handleWithdraw} disabled={withdrawing || metrics.loading}
-              className="inline-flex items-center gap-2 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm"
-              style={{ background: "var(--zx-primary-deep)", color: "white" }}>
-              {withdrawing ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-              {withdrawing ? "Processing..." : "Pull Withdraw"}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={handleWithdraw}
+              disabled={isProcessingAction || metrics.loading || parseFloat(metrics.withdrawable) <= 0}
+              className="inline-flex items-center gap-2 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: "var(--zx-primary-deep)", color: "white" }}
+            >
+              {isProcessingAction ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wallet className="w-3.5 h-3.5" />}
+              <span>{parseFloat(metrics.withdrawable) > 0 ? "Pull Withdraw Funds" : "Zero Balance"}</span>
             </button>
-          )}
+            <button
+              onClick={fetchMetrics}
+              title="Refresh on-chain balance"
+              className="p-2 rounded-xl border hover:bg-slate-100 transition-colors"
+              style={{ borderColor: "var(--zx-border)", color: "var(--zx-muted)" }}
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
-        {/* Pass tier */}
+        {/* ZentrixPass Tier */}
         <div
           className="rounded-3xl p-6 space-y-3 relative overflow-hidden flex items-start justify-between gap-4 shadow-xs"
           style={{ background: "var(--zx-surface)", border: "1px solid var(--zx-border)" }}
@@ -581,7 +885,7 @@ export const DashboardPage: React.FC = () => {
             </div>
             <div className="flex items-baseline gap-2">
               <div className="text-3xl sm:text-4xl font-black">
-                {(metrics.loading && !metrics.passTier) ? (
+                {metrics.loading && !metrics.passTier ? (
                   <Loader2 className="w-8 h-8 animate-spin inline" style={{ color: "var(--zx-primary)" }} />
                 ) : (
                   <span
@@ -597,20 +901,20 @@ export const DashboardPage: React.FC = () => {
                   </span>
                 )}
               </div>
-              <span className="text-xs font-bold font-mono text-[var(--zx-muted)]">
+              <span className="text-xs font-bold font-mono" style={{ color: "var(--zx-muted)" }}>
                 {metrics.passTier === 2
-                  ? "(15 queries/day)"
+                  ? "(15 AI/day)"
                   : metrics.passTier === 1
-                  ? "(10 queries/day)"
-                  : "(2 queries/day)"}
+                  ? "(10 AI/day)"
+                  : "(2 AI/day)"}
               </span>
             </div>
             <p className="text-xs leading-relaxed" style={{ color: "var(--zx-muted)" }}>
               {metrics.passTier === 2
-                ? "Enterprise Soulbound NFT active — 15 AI queries daily"
+                ? "Enterprise Soulbound Pass active — full quota"
                 : metrics.passTier === 1
-                ? "Pro Soulbound NFT active — 10 AI queries daily"
-                : "Free Starter allowance — 2 AI queries daily"}
+                ? "PRO Soulbound Pass active — 10 queries daily"
+                : "Free Starter allowance on MST Testnet"}
             </p>
             {metrics.passTier === 0 ? (
               <Link
@@ -618,17 +922,16 @@ export const DashboardPage: React.FC = () => {
                 className="inline-flex items-center gap-1 text-xs font-bold hover:underline"
                 style={{ color: "var(--zx-primary-deep)" }}
               >
-                <span>Upgrade to PRO or Enterprise Pass →</span>
+                <span>Upgrade to PRO Pass →</span>
               </Link>
             ) : (
               <div className="inline-flex items-center gap-1.5 text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Soulbound NFT Active · Full Color</span>
+                <span>Pass #{metrics.passTokenId || 1} Anchored</span>
               </div>
             )}
           </div>
 
-          {/* Fixed Mini NFT Visual preview */}
           <div
             className={`w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-2 shrink-0 bg-black shadow-md relative group transition-all duration-300 ${
               metrics.passTier === 2
@@ -640,468 +943,1170 @@ export const DashboardPage: React.FC = () => {
           >
             <img
               src={metrics.passTier === 2 ? "/2.gif" : metrics.passTier === 1 ? "/1.gif" : "/robot.png"}
-              alt={
-                metrics.passTier === 2
-                  ? "Enterprise Pass NFT"
-                  : metrics.passTier === 1
-                  ? "PRO Pass NFT"
-                  : "Free Starter Pass"
-              }
+              alt="Zentrix Pass"
               className={`w-full h-full object-cover transition-all duration-500 ${
                 metrics.passTier > 0
                   ? "grayscale-0 group-hover:scale-110"
                   : "grayscale opacity-75 group-hover:grayscale-0 group-hover:opacity-100 group-hover:scale-105"
               }`}
             />
-            {metrics.passTier > 0 ? (
-              <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-full bg-black/80 backdrop-blur-xs text-[9px] font-mono font-bold text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span>{metrics.passTier === 2 ? "ENT" : "PRO"}</span>
-              </div>
-            ) : (
-              <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-full bg-black/80 backdrop-blur-xs text-[9px] font-mono font-bold text-slate-300 border border-white/20 flex items-center gap-1">
-                <Lock className="w-2.5 h-2.5 text-slate-400" />
-                <span>FREE</span>
-              </div>
-            )}
+            <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-full bg-black/80 backdrop-blur-xs text-[9px] font-mono font-bold text-slate-300 border border-white/20 flex items-center gap-1">
+              {metrics.passTier > 0 ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>{metrics.passTier === 2 ? "ENT" : "PRO"}</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-2.5 h-2.5 text-slate-400" />
+                  <span>FREE</span>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Reputation */}
-        <div className="rounded-3xl p-6 space-y-3"
-          style={{ background: "var(--zx-surface)", border: "1px solid var(--zx-border)" }}>
+        {/* Reputation Credentials */}
+        <div
+          className="rounded-3xl p-6 space-y-3 shadow-xs"
+          style={{ background: "var(--zx-surface)", border: "1px solid var(--zx-border)" }}
+        >
           <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--zx-muted)" }}>
             Soulbound Credentials
           </div>
-          <div className="text-4xl font-black" style={{ color: "var(--zx-ink)" }}>
-            {(metrics.loading && metrics.reputationTokenCount === 0)
-              ? <Loader2 className="w-8 h-8 animate-spin inline" style={{ color: "var(--zx-primary)" }} />
-              : metrics.reputationTokenCount
-            }
+          <div className="text-4xl font-black font-mono" style={{ color: "var(--zx-ink)" }}>
+            {metrics.loading && metrics.reputationTokenCount === 0 ? (
+              <Loader2 className="w-8 h-8 animate-spin inline" style={{ color: "var(--zx-primary)" }} />
+            ) : (
+              metrics.reputationTokenCount
+            )}
           </div>
-          <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--zx-success)" }}>
+          <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: "var(--zx-success)" }}>
             <Award className="w-3.5 h-3.5" />
-            Non-transferable ERC-721
+            <span>Non-transferable ERC-721 SBT</span>
           </div>
+          <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+            Earned automatically on verified milestone approval and project completion.
+          </p>
         </div>
       </div>
 
-      {/* Error state */}
-      {metrics.error && (
-        <div className="flex items-center gap-2 p-4 rounded-2xl text-xs"
-          style={{ background: "rgba(163,29,29,0.08)", border: "1px solid var(--zx-danger)", color: "var(--zx-danger)" }}>
-          <AlertCircle className="w-4 h-4 flex-shrink-0" />
-          <span>Chain read error: {metrics.error}</span>
-          <button onClick={fetchMetrics} className="ml-auto flex items-center gap-1 font-bold hover:underline">
-            <RefreshCw className="w-3 h-3" /> Retry
-          </button>
+      {/* ── Sub-Stats Bar ───────────────────────────────────────────── */}
+      <div
+        className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 rounded-2xl border text-xs"
+        style={{ background: "var(--zx-surface)", borderColor: "var(--zx-border)" }}
+      >
+        <div>
+          <span className="text-[11px] block font-mono" style={{ color: "var(--zx-muted)" }}>
+            {currentRole === "client" ? "Posted Gigs" : "Assigned Workrooms"}
+          </span>
+          <span className="text-lg font-black font-mono" style={{ color: "var(--zx-ink)" }}>
+            {currentRole === "client" ? stats.totalGigs : stats.totalGigs}
+          </span>
         </div>
-      )}
-
-      {/* ── Tabs ─────────────────────────────────────────────────────── */}
-      <div className="rounded-3xl overflow-hidden"
-        style={{ background: "var(--zx-surface)", border: "1px solid var(--zx-border)" }}>
-        <div className="flex gap-0 border-b" style={{ borderColor: "var(--zx-border)" }}>
-          {(["overview", "milestones", "reputation", ...(currentRole === "client" ? ["proposals"] as const : [])] as const).map((tab) => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className="flex-1 text-xs font-bold py-4 capitalize transition-all"
-              style={activeTab === tab
-                ? { color: "var(--zx-primary-deep)", borderBottom: "2px solid var(--zx-primary-deep)" }
-                : { color: "var(--zx-muted)" }}>
-              {tab}
-            </button>
-          ))}
+        <div>
+          <span className="text-[11px] block font-mono" style={{ color: "var(--zx-muted)" }}>
+            {currentRole === "client" ? "Escrow Committed" : "Potential Value"}
+          </span>
+          <span className="text-lg font-black font-mono" style={{ color: "var(--zx-primary-deep)" }}>
+            {currentRole === "client" ? `${stats.inEscrow} tMSTC` : `${stats.potentialEarnings} tMSTC`}
+          </span>
         </div>
+        <div>
+          <span className="text-[11px] block font-mono" style={{ color: "var(--zx-muted)" }}>
+            {currentRole === "client" ? "Active Agreements" : "Active Workrooms"}
+          </span>
+          <span className="text-lg font-black font-mono" style={{ color: "var(--zx-ink)" }}>
+            {stats.activeCount}
+          </span>
+        </div>
+        <div>
+          <span className="text-[11px] block font-mono" style={{ color: "var(--zx-muted)" }}>
+            {currentRole === "client" ? "Proposals Received" : "Applications Submitted"}
+          </span>
+          <span className="text-lg font-black font-mono" style={{ color: "var(--zx-ink)" }}>
+            {stats.proposalsCount}
+          </span>
+        </div>
+      </div>
 
-        <div className="p-6">
-          {/* Overview tab */}
-          {activeTab === "overview" && (
-            <div className="space-y-4">
-              <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
-                On-chain data pulled live from ZentrixEscrow at{" "}
-                <code className="font-mono text-[var(--zx-primary-deep)]">
-                  {CONTRACT_ADDRESSES.ZentrixEscrow.slice(0, 10)}...
-                </code>
-              </p>
-              <div
-                className="p-5 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
-                style={{ background: "var(--zx-cream)", border: "1px solid var(--zx-border)" }}
+      {/* ── Tabbed Workspace ────────────────────────────────────────── */}
+      <div
+        className="rounded-3xl overflow-hidden shadow-xs"
+        style={{ background: "var(--zx-surface)", border: "1px solid var(--zx-border)" }}
+      >
+        {/* Tabs Bar */}
+        <div className="flex border-b" style={{ borderColor: "var(--zx-border)" }}>
+          {[
+            { id: "overview", label: "Overview", icon: Layers },
+            { id: "milestones", label: "Workrooms & Milestones", icon: CheckCircle2, badge: userRelevantGigs.length },
+            {
+              id: "proposals",
+              label: currentRole === "client" ? "Received Proposals" : "My Applications",
+              icon: Inbox,
+              badge: currentRole === "client" ? receivedProposals.length : mySubmittedProposals.length,
+            },
+            { id: "reputation", label: "SBT Credentials", icon: Award, badge: metrics.reputationTokenCount },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className="flex-1 py-4 px-3 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                style={
+                  isActive
+                    ? {
+                        color: "var(--zx-primary-deep)",
+                        borderBottom: "2px solid var(--zx-primary-deep)",
+                        background: "var(--zx-surface-alt)",
+                      }
+                    : { color: "var(--zx-muted)" }
+                }
               >
-                <div>
+                <Icon className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="sm:hidden">{tab.id}</span>
+                {typeof tab.badge === "number" && tab.badge > 0 && (
                   <span
-                    className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full"
+                    className="px-1.5 py-0.2 rounded-full text-[10px] font-mono"
                     style={{
-                      background:
-                        activeMilestone.status === "approved"
-                          ? "rgba(47, 125, 79, 0.12)"
-                          : activeMilestone.status === "review"
-                          ? "rgba(217, 119, 6, 0.12)"
-                          : "var(--zx-surface-alt)",
-                      color:
-                        activeMilestone.status === "approved"
-                          ? "var(--zx-success)"
-                          : activeMilestone.status === "review"
-                          ? "var(--zx-warning)"
-                          : "var(--zx-primary-deep)",
+                      background: isActive ? "var(--zx-primary-deep)" : "var(--zx-border)",
+                      color: isActive ? "white" : "var(--zx-muted)",
                     }}
                   >
-                    <TrendingUp className="w-3 h-3" />
-                    {activeMilestone.status === "approved"
-                      ? "Approved & Non-Reversible"
-                      : activeMilestone.status === "review"
-                      ? "Under Review (Awaiting Client)"
-                      : "In Progress (Pending Submission)"}
+                    {tab.badge}
                   </span>
-                  <h4 className="text-sm font-bold mt-2" style={{ color: "var(--zx-ink)" }}>
-                    {activeMilestone.label}
-                  </h4>
-                  <p className="text-xs text-[var(--zx-muted)] mt-1">{activeMilestone.description}</p>
-                  <p className="text-xs mt-1.5 font-mono" style={{ color: "var(--zx-muted)" }}>
-                    Milestone {activeMilestone.num} of {milestones.length} · Escrow:{" "}
-                    <span className="font-bold" style={{ color: "var(--zx-primary-deep)" }}>
-                      {activeMilestone.amount} tMSTC
-                    </span>
-                    {" "}· Contract:{" "}
-                    <code className="text-[10px]">
-                      {CONTRACT_ADDRESSES.ZentrixEscrow.slice(0, 10)}...
-                    </code>
-                  </p>
-                </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
-                <div className="flex items-center gap-2 flex-shrink-0 self-end md:self-center">
-                  <a
-                    href={`https://testnet.mstscan.com/address/${CONTRACT_ADDRESSES.ZentrixEscrow}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-xl transition-all hover:bg-slate-100"
-                    style={{ background: "var(--zx-surface)", border: "1px solid var(--zx-border)", color: "var(--zx-ink)" }}
-                  >
-                    MSTScan <ExternalLink className="w-3 h-3" />
-                  </a>
-
-                  {activeMilestone.status === "approved" ? (
-                    <button
-                      disabled
-                      className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-xl opacity-80 cursor-not-allowed text-white shadow-xs"
-                      style={{ background: "var(--zx-success)" }}
-                      title="Once approved, milestone status is permanent and cannot be changed"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Approved (Locked)
-                    </button>
-                  ) : currentRole === "client" ? (
-                    <button
-                      onClick={() => handleApproveMilestone(activeMilestone.num)}
-                      className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-xl text-white shadow-xs hover:opacity-90 transition-all cursor-pointer"
-                      style={{ background: "var(--zx-success)" }}
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      {activeMilestone.status === "review" ? "Approve Milestone" : "Approve Early"}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleSubmitForReview(activeMilestone.num)}
-                      disabled={activeMilestone.status === "review"}
-                      className={`inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-xl text-white shadow-xs transition-all ${
-                        activeMilestone.status === "review"
-                          ? "opacity-60 cursor-not-allowed"
-                          : "cursor-pointer hover:opacity-90"
-                      }`}
-                      style={{ background: "var(--zx-primary-deep)" }}
-                    >
-                      {activeMilestone.status === "review" ? "Under Review (Waiting)" : "Submit for Review"}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-
-          {/* Proposals tab */}
-          {activeTab === "proposals" && currentRole === "client" && (
-            <div className="space-y-4">
-              <h3 className="font-bold text-lg" style={{ color: "var(--zx-ink)" }}>Received Proposals</h3>
-              {clientGigs.length === 0 ? (
-                <p className="text-sm text-gray-500">No gigs found for your address.</p>
-              ) : (
-                clientGigs.map((gig: any) => {
-                  const proposals = gig.proposals ? Object.values(gig.proposals) : [];
-                  return (
-                    <div key={gig.id} className="p-4 rounded-2xl border" style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}>
-                      <h4 className="font-bold mb-2">{gig.title}</h4>
-                      {proposals.length === 0 ? (
-                        <p className="text-xs text-gray-500">No proposals yet.</p>
-                      ) : (
-                        <div className="space-y-3 mt-3">
-                          {proposals.map((prop: any) => (
-                            <div key={prop.freelancerAddress} className="p-3 bg-white rounded-xl border flex justify-between items-center">
-                              <div>
-                                <p className="text-xs font-mono mb-1">{prop.freelancerAddress}</p>
-                                <p className="text-sm text-gray-700">{prop.proposalText || prop.pitch}</p>
-                              </div>
-                              <button 
-                                onClick={() => handleAssign(gig.id, prop.freelancerAddress)}
-                                disabled={gig.status === "Assigned" || gig.status === "Active"}
-                                className={`px-4 py-1.5 rounded-lg text-white text-xs font-bold ${gig.status === "Assigned" || gig.status === "Active" ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700"}`}
-                              >
-                                {gig.status === "Assigned" || gig.status === "Active" ? "Assigned" : "Assign"}
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          )}
-
-          {/* Milestones tab */}
-          {activeTab === "milestones" && (
+        {/* Tab Body */}
+        <div className="p-6">
+          {/* ══════════════════════════════════════════════════════════
+              TAB 1: OVERVIEW
+             ══════════════════════════════════════════════════════════ */}
+          {activeTab === "overview" && (
             <div className="space-y-6">
-              {activeGigs.length > 0 && (
-                <div className="space-y-4">
-                  <h3 className="text-lg font-bold" style={{ color: "var(--zx-ink)" }}>Active Workrooms</h3>
-                  {activeGigs.map(gig => (
-                    <div key={gig.id} className="p-4 rounded-2xl" style={{ background: "var(--zx-surface-alt)", border: "1px solid var(--zx-border)" }}>
-                      <h4 className="font-bold text-md mb-2">{gig.title}</h4>
-                      <p className="text-xs text-gray-500 mb-4">{gig.description}</p>
-
-                      <div className="space-y-3">
-                        {gig.milestones && gig.milestones.map((m: any, idx: number) => (
-                          <div key={idx} className="p-3 bg-white rounded-xl border flex flex-col md:flex-row justify-between gap-3 items-center">
-                            <div>
-                              <span className="font-bold text-sm">Milestone {idx + 1}: {m.name}</span>
-                              <div className="text-xs text-gray-500">Escrow: {m.escrowAmount} tMSTC | Status: {m.status || "pending"}</div>
-                            </div>
-
-                            <div className="flex flex-col gap-2 w-full md:w-auto">
-                              {currentRole === "freelancer" && (!m.status || m.status === "pending") && (
-                                <div className="flex gap-2 w-full">
-                                  <input
-                                    type="text"
-                                    placeholder="IPFS CID..."
-                                    value={submissionCid}
-                                    onChange={(e) => setSubmissionCid(e.target.value)}
-                                    className="px-3 py-1.5 text-xs rounded border w-full"
-                                  />
-                                  <button
-                                    onClick={() => submitRealMilestone(gig.id, idx, submissionCid)}
-                                    className="px-4 py-1.5 rounded-lg text-white text-xs font-bold whitespace-nowrap"
-                                    style={{ background: "var(--zx-primary-deep)" }}
-                                  >
-                                    Submit Work
-                                  </button>
-                                </div>
-                              )}
-                              {currentRole === "client" && m.status === "review" && (
-                                <div className="flex items-center gap-2">
-                                  <a href={`https://ipfs.io/ipfs/${m.cid}`} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">View Work ({m.cid?.slice(0,6)}...)</a>
-                                  <button
-                                    onClick={() => approveRealMilestone(gig.id, idx, gig.milestones.length)}
-                                    className="px-4 py-1.5 rounded-lg text-white text-xs font-bold"
-                                    style={{ background: "var(--zx-success)" }}
-                                  >
-                                    Approve & Release Funds
-                                  </button>
-                                </div>
-                              )}
-                              {m.status === "approved" && (
-                                <span className="text-xs font-bold text-green-700">Approved</span>
-                              )}
-                              {m.status === "review" && currentRole === "freelancer" && (
-                                <span className="text-xs font-bold text-orange-600">Pending Client Review</span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1">
-                <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
-                  Milestone-gated escrow lifecycle. Freelancers submit deliverables; Mentors/Clients approve.
-                </p>
-                <span className="text-[11px] font-bold text-[var(--zx-primary-deep)]">
-                  Invariant: Once Approved, status cannot be changed.
-                </span>
-              </div>
-
-              {milestones.map(({ num, label, amount, description, status, submittedAt, approvedAt }) => (
+              {/* Priority Action Card */}
+              {priorityActionMilestone ? (
                 <div
-                  key={num}
-                  className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-2xl transition-all"
-                  style={{ background: "var(--zx-cream)", border: "1px solid var(--zx-border)" }}
+                  className="p-5 rounded-2xl border space-y-3"
+                  style={{
+                    background: "var(--zx-cream)",
+                    borderColor:
+                      priorityActionMilestone.type === "review_needed"
+                        ? "var(--zx-warning)"
+                        : "var(--zx-primary)",
+                  }}
                 >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black shrink-0 mt-0.5"
-                      style={
-                        status === "approved"
-                          ? { background: "var(--zx-success)", color: "white" }
-                          : status === "review"
-                          ? { background: "rgba(217,119,6,0.15)", color: "var(--zx-warning)" }
-                          : { background: "var(--zx-surface)", color: "var(--zx-muted)", border: "1px solid var(--zx-border)" }
-                      }
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span
+                      className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full"
+                      style={{
+                        background:
+                          priorityActionMilestone.type === "review_needed"
+                            ? "rgba(217, 119, 6, 0.15)"
+                            : "rgba(163, 4, 2, 0.1)",
+                        color:
+                          priorityActionMilestone.type === "review_needed"
+                            ? "var(--zx-warning)"
+                            : "var(--zx-primary-deep)",
+                      }}
                     >
-                      {status === "approved" ? "✓" : num}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-bold" style={{ color: "var(--zx-ink)" }}>
-                          Milestone {num}: {label}
-                        </span>
-                        <span
-                          className="text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full"
-                          style={
-                            status === "approved"
-                              ? { background: "rgba(47,125,79,0.12)", color: "var(--zx-success)" }
-                              : status === "review"
-                              ? { background: "rgba(217,119,6,0.12)", color: "var(--zx-warning)" }
-                              : { background: "var(--zx-surface)", color: "var(--zx-muted)", border: "1px solid var(--zx-border)" }
-                          }
-                        >
-                          {status === "approved" ? "Approved" : status === "review" ? "Under Review" : "Pending"}
-                        </span>
-                      </div>
-                      <p className="text-xs text-[var(--zx-muted)] mt-1">{description}</p>
-                      <div className="text-[11px] font-mono mt-1" style={{ color: "var(--zx-muted)" }}>
-                        Escrow: <strong style={{ color: "var(--zx-ink)" }}>{amount} tMSTC</strong>
-                        {status === "review" && (
-                          <span className="ml-2 text-amber-700">· 72h auto-release window active {submittedAt ? `(Submitted ${submittedAt})` : ""}</span>
-                        )}
-                        {status === "approved" && (
-                          <span className="ml-2 text-emerald-700 font-semibold">· Permanently Approved {approvedAt ? `(${approvedAt})` : ""}</span>
-                        )}
-                      </div>
-                    </div>
+                      <AlertTriangle className="w-3 h-3" />
+                      {priorityActionMilestone.type === "review_needed"
+                        ? "Action Required: Client Review Needed"
+                        : priorityActionMilestone.type === "accept_assignment"
+                        ? "Action Required: Accept Assignment"
+                        : "Action Required: Deliverable Due"}
+                    </span>
+                    <span className="text-xs font-mono font-bold" style={{ color: "var(--zx-primary-deep)" }}>
+                      Gig ID #{priorityActionMilestone.gig.id}
+                    </span>
                   </div>
 
-                  {/* Action Buttons */}
-                  <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-                    {status === "approved" ? (
-                      <span
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold opacity-80 cursor-not-allowed"
-                        style={{
-                          background: "rgba(47,125,79,0.12)",
-                          color: "var(--zx-success)",
-                          border: "1px solid var(--zx-success)",
-                        }}
-                        title="Once approved, milestone status cannot be changed"
+                  <div>
+                    <h3 className="text-base font-black" style={{ color: "var(--zx-ink)" }}>
+                      {priorityActionMilestone.gig.title}
+                    </h3>
+                    <p className="text-xs font-semibold mt-0.5" style={{ color: "var(--zx-muted)" }}>
+                      Milestone {priorityActionMilestone.index + 1}: {priorityActionMilestone.milestone.title}
+                    </p>
+                    {priorityActionMilestone.milestone.acceptanceCriteria && (
+                      <p className="text-xs mt-1 text-[var(--zx-muted)]">
+                        Criteria: {priorityActionMilestone.milestone.acceptanceCriteria}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2 border-t" style={{ borderColor: "var(--zx-border)" }}>
+                    <div className="text-xs font-mono" style={{ color: "var(--zx-muted)" }}>
+                      Escrow: <strong style={{ color: "var(--zx-ink)" }}>{priorityActionMilestone.milestone.amount} tMSTC</strong>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setActiveTab("milestones")}
+                        className="px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-colors hover:bg-slate-100 cursor-pointer"
+                        style={{ borderColor: "var(--zx-border)", color: "var(--zx-ink)" }}
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Approved (Locked)
-                      </span>
-                    ) : status === "review" ? (
-                      currentRole === "client" ? (
+                        Open Workroom →
+                      </button>
+
+                      {currentRole === "client" && priorityActionMilestone.type === "review_needed" && (
                         <button
-                          onClick={() => handleApproveMilestone(num)}
-                          className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all flex items-center gap-1 cursor-pointer"
+                          onClick={() =>
+                            handleApproveMilestone(
+                              priorityActionMilestone.gig.id,
+                              priorityActionMilestone.index,
+                              priorityActionMilestone.gig.milestones?.length || 1
+                            )
+                          }
+                          disabled={isProcessingAction}
+                          className="px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer flex items-center gap-1.5"
                           style={{ background: "var(--zx-success)" }}
                         >
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          Approve Milestone
+                          <span>Approve & Release Funds</span>
                         </button>
-                      ) : (
-                        <span
-                          className="px-3 py-1.5 rounded-xl text-xs font-semibold"
-                          style={{
-                            background: "rgba(217,119,6,0.12)",
-                            color: "var(--zx-warning)",
-                            border: "1px solid var(--zx-warning)",
-                          }}
-                        >
-                          Awaiting Client Review
-                        </span>
-                      )
-                    ) : (
-                      /* pending status */
-                      currentRole === "freelancer" ? (
+                      )}
+
+                      {currentRole === "freelancer" && priorityActionMilestone.type === "accept_assignment" && (
                         <button
-                          onClick={() => handleSubmitForReview(num)}
-                          className="px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer"
+                          onClick={() => handleAcceptAssignment(priorityActionMilestone.gig.id)}
+                          disabled={isProcessingAction}
+                          className="px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer flex items-center gap-1.5"
                           style={{ background: "var(--zx-primary-deep)" }}
                         >
-                          Submit for Review
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Accept Assignment</span>
                         </button>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-[var(--zx-muted)]">Pending Submission</span>
-                          <button
-                            onClick={() => handleApproveMilestone(num)}
-                            className="px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors hover:bg-slate-100 cursor-pointer"
-                            style={{ borderColor: "var(--zx-border)", color: "var(--zx-ink)" }}
-                          >
-                            Approve Early
-                          </button>
-                        </div>
-                      )
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div
+                  className="p-5 rounded-2xl border text-center space-y-2"
+                  style={{ background: "var(--zx-surface-alt)", borderColor: "var(--zx-border)" }}
+                >
+                  <CheckCircle2 className="w-8 h-8 mx-auto" style={{ color: "var(--zx-success)" }} />
+                  <h4 className="text-sm font-bold" style={{ color: "var(--zx-ink)" }}>
+                    All Caught Up
+                  </h4>
+                  <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+                    No pending deliverables or reviews currently require your immediate action.
+                  </p>
+                </div>
+              )}
+
+              {/* Recent Gigs List */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black uppercase tracking-wide" style={{ color: "var(--zx-ink)" }}>
+                    {currentRole === "client" ? "Your Posted Gigs" : "Your Assigned Workrooms"}
+                  </h3>
+                  <button
+                    onClick={() => setActiveTab("milestones")}
+                    className="text-xs font-bold hover:underline flex items-center gap-1"
+                    style={{ color: "var(--zx-primary-deep)" }}
+                  >
+                    <span>View all in Milestones</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+
+                {isLoadingGigs ? (
+                  <div className="py-8 text-center space-y-2">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto" style={{ color: "var(--zx-primary)" }} />
+                    <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+                      Loading verified gigs from Firebase RTDB...
+                    </p>
+                  </div>
+                ) : userRelevantGigs.length === 0 ? (
+                  <div
+                    className="py-12 text-center rounded-2xl border space-y-3"
+                    style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}
+                  >
+                    <Briefcase className="w-8 h-8 mx-auto" style={{ color: "var(--zx-border)" }} />
+                    <div className="space-y-1">
+                      <p className="text-sm font-bold" style={{ color: "var(--zx-ink)" }}>
+                        {currentRole === "client" ? "No Gigs Posted Yet" : "No Active Workrooms"}
+                      </p>
+                      <p className="text-xs max-w-sm mx-auto" style={{ color: "var(--zx-muted)" }}>
+                        {currentRole === "client"
+                          ? "Post a gig on the marketplace to lock milestone escrow and hire verified talent."
+                          : "Explore open gigs on the marketplace and submit proposals to start working."}
+                      </p>
+                    </div>
+                    <Link
+                      to="/marketplace"
+                      className="inline-flex items-center gap-1 text-xs font-bold px-4 py-2 rounded-xl text-white shadow-xs hover:opacity-90 transition-all cursor-pointer"
+                      style={{ background: "var(--zx-primary-deep)" }}
+                    >
+                      <span>Explore Marketplace</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {userRelevantGigs.slice(0, 5).map((gig) => {
+                      const approvedCount = gig.milestones?.filter((m) => m.status === "approved").length || 0;
+                      const totalM = gig.milestones?.length || 1;
+                      return (
+                        <div
+                          key={gig.id}
+                          className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl border transition-all hover:bg-[var(--zx-surface-alt)]"
+                          style={{ borderColor: "var(--zx-border)", background: "var(--zx-surface)" }}
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-sm" style={{ color: "var(--zx-ink)" }}>
+                                {gig.title}
+                              </span>
+                              <span
+                                className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
+                                style={{
+                                  background:
+                                    gig.status === "Completed"
+                                      ? "rgba(22, 163, 74, 0.12)"
+                                      : gig.status === "Active"
+                                      ? "rgba(217, 119, 6, 0.12)"
+                                      : "var(--zx-surface-alt)",
+                                  color:
+                                    gig.status === "Completed"
+                                      ? "var(--zx-success)"
+                                      : gig.status === "Active"
+                                      ? "var(--zx-warning)"
+                                      : "var(--zx-primary-deep)",
+                                }}
+                              >
+                                {gig.status}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs font-mono" style={{ color: "var(--zx-muted)" }}>
+                              <span>ID: #{gig.id}</span>
+                              <span>·</span>
+                              <span>Budget: <strong style={{ color: "var(--zx-ink)" }}>{gig.totalBudget} tMSTC</strong></span>
+                              <span>·</span>
+                              <span>{approvedCount}/{totalM} Milestones Approved</span>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => setActiveTab("milestones")}
+                            className="inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-xl border hover:bg-slate-100 transition-colors cursor-pointer self-end sm:self-center"
+                            style={{ borderColor: "var(--zx-border)", color: "var(--zx-ink)" }}
+                          >
+                            <span>Manage</span>
+                            <ChevronRight className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
-          {/* Reputation tab */}
-          {activeTab === "reputation" && (
-            <div className="space-y-3">
-              {metrics.reputationTokenCount === 0 ? (
-                <div className="text-center py-12 space-y-3">
-                  <Award className="w-10 h-10 mx-auto" style={{ color: "var(--zx-border)" }} />
-                  <p className="text-sm" style={{ color: "var(--zx-muted)" }}>
-                    No soulbound credentials yet. Complete your first gig to earn your first SBT.
+          {/* ══════════════════════════════════════════════════════════
+              TAB 2: WORKROOMS & MILESTONES
+             ══════════════════════════════════════════════════════════ */}
+          {activeTab === "milestones" && (
+            <div className="space-y-6">
+              {/* Header and filters */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-2 border-b" style={{ borderColor: "var(--zx-border)" }}>
+                <div>
+                  <h3 className="font-bold text-base" style={{ color: "var(--zx-ink)" }}>
+                    {currentRole === "client" ? "Client Workrooms & Milestones" : "Freelancer Active Workrooms"}
+                  </h3>
+                  <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+                    Milestone escrow anchored by ZentrixEscrow on MST Testnet. Immutable upon approval.
                   </p>
                 </div>
+
+                <div className="flex items-center gap-1.5">
+                  {(["all", "active", "open", "completed"] as const).map((filter) => (
+                    <button
+                      key={filter}
+                      onClick={() => setMilestoneFilter(filter)}
+                      className="px-2.5 py-1 rounded-xl text-xs font-bold capitalize transition-all cursor-pointer"
+                      style={
+                        milestoneFilter === filter
+                          ? { background: "var(--zx-primary-deep)", color: "white" }
+                          : { background: "var(--zx-surface-alt)", color: "var(--zx-muted)" }
+                      }
+                    >
+                      {filter}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {isLoadingGigs ? (
+                <div className="py-12 text-center space-y-2">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto" style={{ color: "var(--zx-primary)" }} />
+                  <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+                    Loading verified gigs from Firebase RTDB...
+                  </p>
+                </div>
+              ) : userRelevantGigs.length === 0 ? (
+                <div
+                  className="py-16 text-center rounded-2xl border space-y-3"
+                  style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}
+                >
+                  <Briefcase className="w-10 h-10 mx-auto" style={{ color: "var(--zx-border)" }} />
+                  <h4 className="text-base font-black" style={{ color: "var(--zx-ink)" }}>
+                    {currentRole === "client" ? "No Gigs Found For Your Address" : "No Assigned Workrooms"}
+                  </h4>
+                  <p className="text-xs max-w-sm mx-auto" style={{ color: "var(--zx-muted)" }}>
+                    {currentRole === "client"
+                      ? "You haven't posted any gigs yet. Create a gig with milestone plans to anchor funds on MST Testnet."
+                      : "You have not been assigned to any gigs yet. Browse open gigs and submit proposals to get started."}
+                  </p>
+                  <Link
+                    to="/marketplace"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer"
+                    style={{ background: "var(--zx-primary-deep)" }}
+                  >
+                    <span>Browse Marketplace</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-6">
+                  {userRelevantGigs
+                    .filter((g) => {
+                      if (milestoneFilter === "active") return g.status === "Active" || g.status === "Assigned";
+                      if (milestoneFilter === "open") return g.status === "Open" || g.status === "Submitted";
+                      if (milestoneFilter === "completed") return g.status === "Completed";
+                      return true;
+                    })
+                    .map((gig) => {
+                      const totalMilestones = gig.milestones?.length || 1;
+                      const approvedCount = gig.milestones?.filter((m) => m.status === "approved").length || 0;
+
+                      return (
+                        <div
+                          key={gig.id}
+                          className="rounded-2xl border overflow-hidden shadow-xs"
+                          style={{ borderColor: "var(--zx-border)", background: "var(--zx-surface)" }}
+                        >
+                          {/* Gig Header */}
+                          <div
+                            className="p-5 border-b flex flex-col md:flex-row md:items-center justify-between gap-4"
+                            style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2.5 flex-wrap">
+                                <h4 className="text-base font-black" style={{ color: "var(--zx-ink)" }}>
+                                  {gig.title}
+                                </h4>
+                                <span
+                                  className="text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full"
+                                  style={{
+                                    background:
+                                      gig.status === "Completed"
+                                        ? "rgba(22, 163, 74, 0.12)"
+                                        : gig.status === "Active"
+                                        ? "rgba(217, 119, 6, 0.12)"
+                                        : "var(--zx-surface-alt)",
+                                    color:
+                                      gig.status === "Completed"
+                                        ? "var(--zx-success)"
+                                        : gig.status === "Active"
+                                        ? "var(--zx-warning)"
+                                        : "var(--zx-primary-deep)",
+                                  }}
+                                >
+                                  {gig.status}
+                                </span>
+                                {gig.category && (
+                                  <span
+                                    className="text-[10px] font-mono px-2 py-0.5 rounded-md border"
+                                    style={{ background: "white", borderColor: "var(--zx-border)", color: "var(--zx-muted)" }}
+                                  >
+                                    {gig.category}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-[var(--zx-muted)]">{gig.description}</p>
+                              <div className="flex items-center gap-4 text-[11px] font-mono pt-1 text-[var(--zx-muted)] flex-wrap">
+                                <span>Gig ID: <strong>#{gig.id}</strong></span>
+                                <span>·</span>
+                                <span>Total Escrow: <strong style={{ color: "var(--zx-primary-deep)" }}>{gig.totalBudget} tMSTC</strong></span>
+                                <span>·</span>
+                                <span>Progress: <strong>{approvedCount}/{totalMilestones} Approved</strong></span>
+                                {gig.freelancer && (
+                                  <>
+                                    <span>·</span>
+                                    <span>Freelancer: {gig.freelancer.slice(0, 6)}...{gig.freelancer.slice(-4)}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Gig Level Action */}
+                            <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                              {gig.status === "Assigned" && currentRole === "freelancer" && (
+                                <button
+                                  onClick={() => handleAcceptAssignment(gig.id)}
+                                  disabled={isProcessingAction}
+                                  className="px-4 py-2 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer flex items-center gap-1.5"
+                                  style={{ background: "var(--zx-primary-deep)" }}
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Accept Assignment</span>
+                                </button>
+                              )}
+                              {gig.status === "Assigned" && currentRole === "client" && (
+                                <span className="text-xs text-[var(--zx-muted)] font-mono">
+                                  Waiting for freelancer acceptance...
+                                </span>
+                              )}
+                              <a
+                                href={`https://testnet.mstscan.com/address/${CONTRACT_ADDRESSES.ZentrixEscrow}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-xl border hover:bg-slate-100 transition-colors"
+                                style={{ borderColor: "var(--zx-border)", color: "var(--zx-ink)" }}
+                              >
+                                <span>Escrow Contract</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                          </div>
+
+                          {/* Milestones in this Gig */}
+                          <div className="p-4 space-y-3">
+                            {!gig.milestones || gig.milestones.length === 0 ? (
+                              <p className="text-xs text-center py-4 text-[var(--zx-muted)]">
+                                No milestone items configured for this gig.
+                              </p>
+                            ) : (
+                              gig.milestones.map((m, idx) => {
+                                const mStatus = m.status || "pending";
+                                const submissionKey = `${gig.id}-${idx}`;
+                                const currentInputValue = submissionInputs[submissionKey] || "";
+
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="p-4 rounded-xl border space-y-3 transition-all"
+                                    style={{
+                                      background:
+                                        mStatus === "approved"
+                                          ? "rgba(22, 163, 74, 0.03)"
+                                          : mStatus === "review"
+                                          ? "rgba(217, 119, 6, 0.03)"
+                                          : "var(--zx-surface)",
+                                      borderColor: "var(--zx-border)",
+                                    }}
+                                  >
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                      <div className="space-y-1">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <div
+                                            className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0"
+                                            style={
+                                              mStatus === "approved"
+                                                ? { background: "var(--zx-success)", color: "white" }
+                                                : mStatus === "review"
+                                                ? { background: "rgba(217, 119, 6, 0.15)", color: "var(--zx-warning)" }
+                                                : { background: "var(--zx-surface-alt)", color: "var(--zx-muted)" }
+                                            }
+                                          >
+                                            {mStatus === "approved" ? "✓" : idx + 1}
+                                          </div>
+                                          <span className="font-bold text-sm" style={{ color: "var(--zx-ink)" }}>
+                                            {m.title}
+                                          </span>
+                                          <span
+                                            className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
+                                            style={{
+                                              background:
+                                                mStatus === "approved"
+                                                  ? "rgba(22, 163, 74, 0.12)"
+                                                  : mStatus === "review"
+                                                  ? "rgba(217, 119, 6, 0.12)"
+                                                  : mStatus === "rejected"
+                                                  ? "rgba(163, 4, 2, 0.12)"
+                                                  : "var(--zx-surface-alt)",
+                                              color:
+                                                mStatus === "approved"
+                                                  ? "var(--zx-success)"
+                                                  : mStatus === "review"
+                                                  ? "var(--zx-warning)"
+                                                  : mStatus === "rejected"
+                                                  ? "var(--zx-danger)"
+                                                  : "var(--zx-muted)",
+                                            }}
+                                          >
+                                            {mStatus === "review" ? "Under Review" : mStatus}
+                                          </span>
+                                        </div>
+
+                                        {m.acceptanceCriteria && (
+                                          <p className="text-xs text-[var(--zx-muted)] pl-8">
+                                            Criteria: {m.acceptanceCriteria}
+                                          </p>
+                                        )}
+
+                                        <div className="flex items-center gap-3 text-[11px] font-mono pl-8 text-[var(--zx-muted)]">
+                                          <span>Escrow Amount: <strong style={{ color: "var(--zx-ink)" }}>{m.amount} tMSTC</strong></span>
+                                          {m.deadlineDays && <span>· Deadline: {m.deadlineDays} days</span>}
+                                          {m.submittedAt && <span>· Submitted: {m.submittedAt}</span>}
+                                          {m.approvedAt && <span className="text-emerald-700">· Approved: {m.approvedAt}</span>}
+                                        </div>
+                                      </div>
+
+                                      {/* Status Tag / Quick Summary */}
+                                      <div className="shrink-0 self-end sm:self-center">
+                                        {mStatus === "approved" ? (
+                                          <span
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold"
+                                            style={{
+                                              background: "rgba(22, 163, 74, 0.12)",
+                                              color: "var(--zx-success)",
+                                              border: "1px solid var(--zx-success)",
+                                            }}
+                                          >
+                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                            <span>Approved (Released)</span>
+                                          </span>
+                                        ) : mStatus === "review" ? (
+                                          <span
+                                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold"
+                                            style={{
+                                              background: "rgba(217, 119, 6, 0.12)",
+                                              color: "var(--zx-warning)",
+                                              border: "1px solid var(--zx-warning)",
+                                            }}
+                                          >
+                                            <Clock className="w-3.5 h-3.5" />
+                                            <span>Under Client Review</span>
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    </div>
+
+                                    {/* Evidence CID display */}
+                                    {m.cid && (
+                                      <div className="p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2" style={{ background: "var(--zx-surface-alt)", borderColor: "var(--zx-border)" }}>
+                                        <div className="flex items-center gap-2 overflow-hidden">
+                                          <FileText className="w-3.5 h-3.5 shrink-0 text-[var(--zx-primary-deep)]" />
+                                          <span className="font-mono truncate">
+                                            Evidence Proof: <strong>{m.cid}</strong>
+                                          </span>
+                                        </div>
+                                        {m.cid.startsWith("Qm") || m.cid.startsWith("ba") ? (
+                                          <a
+                                            href={`https://ipfs.io/ipfs/${m.cid}`}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-xs font-bold underline shrink-0 flex items-center gap-1"
+                                            style={{ color: "var(--zx-primary-deep)" }}
+                                          >
+                                            <span>IPFS View</span>
+                                            <ExternalLink className="w-3 h-3" />
+                                          </a>
+                                        ) : m.cid.startsWith("http") ? (
+                                          <a
+                                            href={m.cid}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-xs font-bold underline shrink-0 flex items-center gap-1"
+                                            style={{ color: "var(--zx-primary-deep)" }}
+                                          >
+                                            <span>Open Deliverable</span>
+                                            <ExternalLink className="w-3 h-3" />
+                                          </a>
+                                        ) : null}
+                                      </div>
+                                    )}
+
+                                    {/* Rejection note display */}
+                                    {m.rejectionReason && (
+                                      <div className="p-2.5 rounded-xl border text-xs flex items-center gap-2" style={{ background: "rgba(163, 4, 2, 0.05)", borderColor: "var(--zx-danger)", color: "var(--zx-danger)" }}>
+                                        <XCircle className="w-3.5 h-3.5 shrink-0" />
+                                        <span>Revision Requested: {m.rejectionReason}</span>
+                                      </div>
+                                    )}
+
+                                    {/* Action Buttons Area */}
+                                    <div className="pt-2 border-t flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2" style={{ borderColor: "var(--zx-border)" }}>
+                                      {/* Freelancer Action: Submit deliverable */}
+                                      {currentRole === "freelancer" && (mStatus === "pending" || mStatus === "rejected") && (
+                                        <div className="flex flex-col sm:flex-row items-stretch gap-2 w-full">
+                                          <input
+                                            type="text"
+                                            placeholder="IPFS CID, GitHub PR link, or deliverable proof..."
+                                            value={currentInputValue}
+                                            onChange={(e) =>
+                                              setSubmissionInputs((prev) => ({
+                                                ...prev,
+                                                [submissionKey]: e.target.value,
+                                              }))
+                                            }
+                                            className="flex-1 px-3 py-1.5 text-xs rounded-xl border"
+                                            style={{
+                                              borderColor: "var(--zx-border)",
+                                              background: "var(--zx-surface)",
+                                              color: "var(--zx-ink)",
+                                            }}
+                                          />
+                                          <button
+                                            onClick={() => handleSubmitMilestone(gig.id, idx)}
+                                            disabled={isProcessingAction || !currentInputValue.trim()}
+                                            className="px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer whitespace-nowrap flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            style={{ background: "var(--zx-primary-deep)" }}
+                                          >
+                                            <Send className="w-3 h-3" />
+                                            <span>Submit Deliverable</span>
+                                          </button>
+                                        </div>
+                                      )}
+
+                                      {/* Client Action: Review & Approve / Reject */}
+                                      {currentRole === "client" && mStatus === "review" && (
+                                        <div className="flex items-center gap-2">
+                                          <button
+                                            onClick={() =>
+                                              setRejectionModal({
+                                                gigId: gig.id,
+                                                milestoneIndex: idx,
+                                                title: m.title,
+                                              })
+                                            }
+                                            disabled={isProcessingAction}
+                                            className="px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors hover:bg-slate-100 cursor-pointer"
+                                            style={{ borderColor: "var(--zx-border)", color: "var(--zx-danger)" }}
+                                          >
+                                            Request Revision
+                                          </button>
+                                          <button
+                                            onClick={() => handleApproveMilestone(gig.id, idx, totalMilestones)}
+                                            disabled={isProcessingAction}
+                                            className="px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer flex items-center gap-1.5"
+                                            style={{ background: "var(--zx-success)" }}
+                                          >
+                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                            <span>Approve & Release Funds</span>
+                                          </button>
+                                        </div>
+                                      )}
+
+                                      {currentRole === "client" && mStatus === "pending" && (
+                                        <span className="text-xs text-[var(--zx-muted)] font-mono">
+                                          Freelancer is actively preparing this deliverable.
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════
+              TAB 3: PROPOSALS (CLIENT & FREELANCER VIEWS)
+             ══════════════════════════════════════════════════════════ */}
+          {activeTab === "proposals" && (
+            <div className="space-y-6">
+              {currentRole === "client" ? (
+                /* Client: Proposals Received */
+                <div className="space-y-4">
+                  <div className="border-b pb-2" style={{ borderColor: "var(--zx-border)" }}>
+                    <h3 className="font-bold text-base" style={{ color: "var(--zx-ink)" }}>
+                      Received Proposals ({receivedProposals.length})
+                    </h3>
+                    <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+                      Review applicants for your posted gigs. Assigning locks on-chain milestone escrow.
+                    </p>
+                  </div>
+
+                  {receivedProposals.length === 0 ? (
+                    <div
+                      className="py-16 text-center rounded-2xl border space-y-3"
+                      style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}
+                    >
+                      <Inbox className="w-10 h-10 mx-auto" style={{ color: "var(--zx-border)" }} />
+                      <h4 className="text-base font-black" style={{ color: "var(--zx-ink)" }}>
+                        No Proposals Received Yet
+                      </h4>
+                      <p className="text-xs max-w-sm mx-auto" style={{ color: "var(--zx-muted)" }}>
+                        Your posted gigs are live on the Marketplace. When freelancers submit proposals, they will appear here for review.
+                      </p>
+                      <Link
+                        to="/marketplace"
+                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer"
+                        style={{ background: "var(--zx-primary-deep)" }}
+                      >
+                        <span>View Gigs in Marketplace</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {receivedProposals.map(({ gig, proposal }, index) => {
+                        const isAssigned = gig.status === "Assigned" || gig.status === "Active" || gig.status === "Completed";
+                        const isThisFreelancerAssigned =
+                          gig.freelancer?.toLowerCase() === proposal.freelancerAddress.toLowerCase();
+
+                        return (
+                          <div
+                            key={index}
+                            className="p-5 rounded-2xl border space-y-3"
+                            style={{ background: "var(--zx-surface)", borderColor: "var(--zx-border)" }}
+                          >
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div>
+                                <span className="text-[10px] font-bold uppercase font-mono px-2 py-0.5 rounded-md border" style={{ background: "var(--zx-surface-alt)", borderColor: "var(--zx-border)", color: "var(--zx-muted)" }}>
+                                  Target Gig: #{gig.id}
+                                </span>
+                                <h4 className="font-black text-sm mt-1" style={{ color: "var(--zx-ink)" }}>
+                                  {gig.title}
+                                </h4>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-xs font-mono font-bold" style={{ color: "var(--zx-primary-deep)" }}>
+                                  Budget: {gig.totalBudget} tMSTC
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="p-3.5 rounded-xl border text-xs space-y-2" style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <UserCheck className="w-3.5 h-3.5" style={{ color: "var(--zx-primary-deep)" }} />
+                                  <span className="font-mono font-bold">{proposal.freelancerAddress}</span>
+                                </div>
+                                <span className="text-[10px] font-mono text-[var(--zx-muted)]">
+                                  {proposal.submittedAt}
+                                </span>
+                              </div>
+                              <p className="text-xs leading-relaxed" style={{ color: "var(--zx-ink)" }}>
+                                {proposal.proposalText}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center justify-between pt-1">
+                              <span className="text-[11px] font-mono text-[var(--zx-muted)]">
+                                Status:{" "}
+                                <strong style={{ color: isThisFreelancerAssigned ? "var(--zx-success)" : "var(--zx-ink)" }}>
+                                  {isThisFreelancerAssigned ? "Assigned to this Gig" : proposal.status || "Submitted"}
+                                </strong>
+                              </span>
+
+                              <div className="flex items-center gap-2">
+                                {isThisFreelancerAssigned ? (
+                                  <span
+                                    className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1"
+                                    style={{ background: "rgba(22, 163, 74, 0.12)", color: "var(--zx-success)" }}
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>Assigned</span>
+                                  </span>
+                                ) : isAssigned ? (
+                                  <span className="text-xs text-[var(--zx-muted)] font-mono">
+                                    Another freelancer assigned
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={() => handleAssignFreelancer(gig.id, proposal.freelancerAddress)}
+                                    disabled={isProcessingAction}
+                                    className="px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer flex items-center gap-1.5"
+                                    style={{ background: "var(--zx-primary-deep)" }}
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Accept & Assign Freelancer</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Freelancer: Submitted Applications */
+                <div className="space-y-4">
+                  <div className="border-b pb-2" style={{ borderColor: "var(--zx-border)" }}>
+                    <h3 className="font-bold text-base" style={{ color: "var(--zx-ink)" }}>
+                      My Submitted Applications ({mySubmittedProposals.length})
+                    </h3>
+                    <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+                      Proposals you have submitted to clients on the Zentrix marketplace.
+                    </p>
+                  </div>
+
+                  {mySubmittedProposals.length === 0 ? (
+                    <div
+                      className="py-16 text-center rounded-2xl border space-y-3"
+                      style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}
+                    >
+                      <Inbox className="w-10 h-10 mx-auto" style={{ color: "var(--zx-border)" }} />
+                      <h4 className="text-base font-black" style={{ color: "var(--zx-ink)" }}>
+                        No Proposals Submitted
+                      </h4>
+                      <p className="text-xs max-w-sm mx-auto" style={{ color: "var(--zx-muted)" }}>
+                        You haven't submitted any gig applications yet. Browse the marketplace and apply with your proposed milestones.
+                      </p>
+                      <Link
+                        to="/marketplace"
+                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer"
+                        style={{ background: "var(--zx-primary-deep)" }}
+                      >
+                        <span>Explore Marketplace</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {mySubmittedProposals.map(({ gig, proposal }, index) => {
+                        const isAssignedToMe =
+                          gig.freelancer?.toLowerCase() === userAddr ||
+                          gig.assignedFreelancer?.toLowerCase() === userAddr;
+
+                        return (
+                          <div
+                            key={index}
+                            className="p-5 rounded-2xl border space-y-3"
+                            style={{ background: "var(--zx-surface)", borderColor: "var(--zx-border)" }}
+                          >
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div>
+                                <span className="text-[10px] font-bold uppercase font-mono px-2 py-0.5 rounded-md border" style={{ background: "var(--zx-surface-alt)", borderColor: "var(--zx-border)", color: "var(--zx-muted)" }}>
+                                  Target Gig: #{gig.id}
+                                </span>
+                                <h4 className="font-black text-sm mt-1" style={{ color: "var(--zx-ink)" }}>
+                                  {gig.title}
+                                </h4>
+                              </div>
+                              <span className="text-xs font-mono font-bold" style={{ color: "var(--zx-primary-deep)" }}>
+                                Budget: {gig.totalBudget} tMSTC
+                              </span>
+                            </div>
+
+                            <div className="p-3.5 rounded-xl border text-xs space-y-1.5" style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}>
+                              <p className="text-xs font-semibold" style={{ color: "var(--zx-ink)" }}>
+                                Your Proposal: {proposal.proposalText}
+                              </p>
+                              <p className="text-[10px] font-mono text-[var(--zx-muted)]">
+                                Submitted: {proposal.submittedAt}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center justify-between pt-1">
+                              <span className="text-[11px] font-mono">
+                                Client Status:{" "}
+                                <strong
+                                  style={{
+                                    color: isAssignedToMe ? "var(--zx-success)" : "var(--zx-muted)",
+                                  }}
+                                >
+                                  {isAssignedToMe ? "Accepted & Assigned!" : "Under Consideration"}
+                                </strong>
+                              </span>
+
+                              {isAssignedToMe && gig.status === "Assigned" && (
+                                <button
+                                  onClick={() => handleAcceptAssignment(gig.id)}
+                                  disabled={isProcessingAction}
+                                  className="px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer flex items-center gap-1.5"
+                                  style={{ background: "var(--zx-primary-deep)" }}
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Accept Agreement & Start</span>
+                                </button>
+                              )}
+
+                              {isAssignedToMe && gig.status === "Active" && (
+                                <button
+                                  onClick={() => setActiveTab("milestones")}
+                                  className="px-3.5 py-1.5 rounded-xl text-xs font-bold border hover:bg-slate-100 transition-colors cursor-pointer"
+                                  style={{ borderColor: "var(--zx-border)", color: "var(--zx-ink)" }}
+                                >
+                                  Go to Workroom →
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════
+              TAB 4: REPUTATION SOULBOUND CREDENTIALS
+             ══════════════════════════════════════════════════════════ */}
+          {activeTab === "reputation" && (
+            <div className="space-y-6">
+              <div className="border-b pb-2 flex items-center justify-between" style={{ borderColor: "var(--zx-border)" }}>
+                <div>
+                  <h3 className="font-bold text-base" style={{ color: "var(--zx-ink)" }}>
+                    Soulbound Reputation Credentials (ERC-721)
+                  </h3>
+                  <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+                    Immutable credentials issued by ZentrixReputation upon verified milestone delivery on MST Testnet.
+                  </p>
+                </div>
+                <button
+                  onClick={fetchMetrics}
+                  className="flex items-center gap-1 text-xs font-bold hover:underline"
+                  style={{ color: "var(--zx-primary-deep)" }}
+                >
+                  <RefreshCw className="w-3 h-3" /> Refresh
+                </button>
+              </div>
+
+              {metrics.reputationTokenCount === 0 ? (
+                <div
+                  className="py-16 text-center rounded-2xl border space-y-3"
+                  style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}
+                >
+                  <Award className="w-12 h-12 mx-auto" style={{ color: "var(--zx-border)" }} />
+                  <h4 className="text-base font-black" style={{ color: "var(--zx-ink)" }}>
+                    No Soulbound Credentials Yet
+                  </h4>
+                  <p className="text-xs max-w-sm mx-auto" style={{ color: "var(--zx-muted)" }}>
+                    Credentials are minted on-chain automatically when a client approves deliverables on final milestones. Complete your first gig to earn an immutable credential!
+                  </p>
+                  <Link
+                    to="/marketplace"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer"
+                    style={{ background: "var(--zx-primary-deep)" }}
+                  >
+                    <span>Browse Marketplace</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {Array.from({ length: metrics.reputationTokenCount }).map((_, i) => (
-                    <div key={i} className="p-5 rounded-2xl space-y-3"
-                      style={{ background: "var(--zx-cream)", border: "1px solid var(--zx-border)" }}>
+                    <div
+                      key={i}
+                      className="p-5 rounded-2xl space-y-3 border"
+                      style={{ background: "var(--zx-cream)", borderColor: "var(--zx-border)" }}
+                    >
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
-                          style={{ background: "var(--zx-surface-alt)", color: "var(--zx-primary-deep)" }}>
+                        <span
+                          className="text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full"
+                          style={{ background: "var(--zx-surface-alt)", color: "var(--zx-primary-deep)" }}
+                        >
                           ERC-721 Soulbound
                         </span>
-                        <span className="text-xs font-bold" style={{ color: "var(--zx-success)" }}>5.0 / 5.0</span>
+                        <span className="text-xs font-bold font-mono" style={{ color: "var(--zx-success)" }}>
+                          ★ 5.0 / 5.0
+                        </span>
                       </div>
                       <div>
                         <h4 className="font-bold text-sm" style={{ color: "var(--zx-ink)" }}>
-                          Credential #{i + 1}
+                          Reputation Credential #{i + 1}
                         </h4>
                         <p className="text-xs mt-1" style={{ color: "var(--zx-muted)" }}>
-                          Issued by ZentrixReputation on milestone approval.
+                          Verified deliverable approved on MST Testnet by client agreement.
                         </p>
                       </div>
-                      <div className="text-[10px] font-mono pt-2" style={{ borderTop: "1px solid var(--zx-border)", color: "var(--zx-muted)" }}>
-                        {CONTRACT_ADDRESSES.ZentrixReputation.slice(0, 18)}... · Token #{i + 1}
+                      <div
+                        className="text-[10px] font-mono pt-2 flex items-center justify-between"
+                        style={{ borderTop: "1px solid var(--zx-border)", color: "var(--zx-muted)" }}
+                      >
+                        <span>Contract: {CONTRACT_ADDRESSES.ZentrixReputation.slice(0, 14)}...</span>
+                        <a
+                          href={`https://testnet.mstscan.com/address/${CONTRACT_ADDRESSES.ZentrixReputation}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="hover:underline flex items-center gap-0.5 font-bold"
+                          style={{ color: "var(--zx-primary-deep)" }}
+                        >
+                          <span>MSTScan</span>
+                          <ExternalLink className="w-2.5 h-2.5" />
+                        </a>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-
-              <div className="flex items-center justify-between text-xs pt-2">
-                <span style={{ color: "var(--zx-muted)" }}>
-                  {metrics.reputationTokenCount} credential{metrics.reputationTokenCount !== 1 ? "s" : ""} on-chain
-                </span>
-                <button onClick={fetchMetrics}
-                  className="flex items-center gap-1 font-bold hover:underline"
-                  style={{ color: "var(--zx-primary-deep)" }}>
-                  <RefreshCw className="w-3 h-3" /> Refresh
-                </button>
-              </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* ── Modal: Request Revision ─────────────────────────────────── */}
+      {rejectionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div
+            className="w-full max-w-md p-6 rounded-3xl border shadow-xl space-y-4"
+            style={{ background: "var(--zx-surface)", borderColor: "var(--zx-border)" }}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-black" style={{ color: "var(--zx-ink)" }}>
+                Request Deliverable Revision
+              </h3>
+              <button
+                onClick={() => setRejectionModal(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
+              >
+                <XCircle className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <p className="text-xs" style={{ color: "var(--zx-muted)" }}>
+              Provide constructive feedback for <strong>{rejectionModal.title}</strong>. This feedback will be recorded on-chain and the milestone status will switch to <code>rejected</code> until re-submitted.
+            </p>
+
+            <textarea
+              rows={3}
+              placeholder="Explain required changes, missing criteria, or issues..."
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              className="w-full p-3 text-xs rounded-xl border focus:outline-hidden"
+              style={{
+                borderColor: "var(--zx-border)",
+                background: "var(--zx-surface-alt)",
+                color: "var(--zx-ink)",
+              }}
+            />
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setRejectionModal(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold border hover:bg-slate-100 transition-colors cursor-pointer"
+                style={{ borderColor: "var(--zx-border)", color: "var(--zx-ink)" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRejectMilestone}
+                disabled={isProcessingAction || !rejectionReason.trim()}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white shadow-xs hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ background: "var(--zx-danger)" }}
+              >
+                {isProcessingAction ? "Submitting..." : "Submit Revision Request"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

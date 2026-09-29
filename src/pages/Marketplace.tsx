@@ -287,36 +287,7 @@ export const MarketplacePage: React.FC = () => {
 
       setGigs(updatedGigs);
 
-      // Sync milestones into localStorage for Dashboard
-      try {
-        const savedMilestonesRaw = localStorage.getItem("zx_dashboard_milestones");
-        let currentMilestones: any[] = [];
-        if (savedMilestonesRaw) {
-          currentMilestones = JSON.parse(savedMilestonesRaw);
-        }
 
-        const existingTitles = new Set(currentMilestones.map((m: any) => m.label));
-        const newItems = targetGig.milestones
-          .filter((m) => !existingTitles.has(`${targetGig.title} — ${m.title}`))
-          .map((m, idx) => ({
-            id: Date.now() + idx,
-            num: currentMilestones.length + idx + 1,
-            label: `${targetGig.title} — ${m.title}`,
-            amount: m.amount,
-            description: m.acceptanceCriteria,
-            status: "pending",
-            gigId: targetGig.id,
-            freelancerAddress: proposal.freelancerAddress,
-          }));
-
-        if (newItems.length > 0) {
-          const combined = [...currentMilestones, ...newItems];
-          localStorage.setItem("zx_dashboard_milestones", JSON.stringify(combined));
-          window.dispatchEvent(new Event("zx_milestones_updated"));
-        }
-      } catch (err) {
-        console.error("Failed to sync milestones to dashboard", err);
-      }
 
       // Update activeGig modal view
       const refreshedGig = updatedGigs.find((g) => g.id === gigId);
