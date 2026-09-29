@@ -2,6 +2,8 @@ import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useWallet } from "../context/WalletContext";
+import { ethers } from "ethers";
+import { CONTRACT_ADDRESSES, CONTRACT_ABIS } from "../contracts";
 import { FREELANCE_CATEGORIES, ALL_FREELANCE_TAGS } from "../lib/tags";
 import { EscrowFlowInfographic } from "../components/EscrowFlowInfographic";
 import {
@@ -226,7 +228,8 @@ const INITIAL_GIGS: GigItem[] = [
 
 export const MarketplacePage: React.FC = () => {
   const { currentRole, profile, user } = useAuth();
-  const { address, isConnected, openConnectModal } = useWallet();
+  const { address, isConnected, openConnectModal, signer } = useWallet();
+  const [isLoadingTransaction, setIsLoadingTransaction] = useState(false);
 
   const [gigs, setGigs] = useState<GigItem[]>(() => {
     try {
@@ -287,37 +290,59 @@ export const MarketplacePage: React.FC = () => {
     ]);
   };
 
-  const handleCreateGig = (e: React.FormEvent) => {
+  const handleCreateGig = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!address) {
+    if (!address || !signer) {
       openConnectModal();
       return;
     }
 
     const total = newMilestones.reduce((acc, m) => acc + parseFloat(m.amount || "0"), 0).toFixed(1);
 
-    const created: GigItem = {
-      id: (gigs.length + 1).toString(),
-      title: newTitle,
-      description: newDesc,
-      client: address,
-      totalBudget: total,
-      reviewWindowHours: 72,
-      category: newCategory.includes("Dev") ? "Development" : newCategory.includes("Design") ? "Design" : newCategory.includes("Content") ? "Content" : newCategory.includes("AI") ? "AI" : "Growth",
-      tags: newSelectedTags,
-      technologies: newSelectedTags.slice(0, 3),
-      status: "Open",
-      milestones: newMilestones,
-    };
+    try {
+      setIsLoadingTransaction(true);
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      const totalBudgetWei = ethers.parseEther(total);
+      const plan = newMilestones.map(m => ({
+        amount: ethers.parseEther(m.amount),
+        deadline: 0,
+        criteriaHash: ethers.ZeroHash
+      }));
+      
+      const tx = await escrow.createGig("QmMocked", plan, 72 * 3600, { value: totalBudgetWei });
+      await tx.wait();
 
-    setGigs([created, ...gigs]);
-    setIsCreateModalOpen(false);
-    setNewTitle("");
-    setNewDesc("");
-    setActionFeedback({
-      type: "success",
-      msg: `Gig "${created.title}" created! Milestones ready for on-chain Escrow assignment on MST Testnet.`,
-    });
+      const created: GigItem = {
+        id: (gigs.length + 1).toString(),
+        title: newTitle,
+        description: newDesc,
+        client: address,
+        totalBudget: total,
+        reviewWindowHours: 72,
+        category: newCategory.includes("Dev") ? "Development" : newCategory.includes("Design") ? "Design" : newCategory.includes("Content") ? "Content" : newCategory.includes("AI") ? "AI" : "Growth",
+        tags: newSelectedTags,
+        technologies: newSelectedTags.slice(0, 3),
+        status: "Open",
+        milestones: newMilestones,
+      };
+
+      setGigs([created, ...gigs]);
+      setIsCreateModalOpen(false);
+      setNewTitle("");
+      setNewDesc("");
+      setActionFeedback({
+        type: "success",
+        msg: `Gig "${created.title}" created! Milestones ready for on-chain Escrow assignment on MST Testnet.`,
+      });
+    } catch (err: any) {
+      console.error(err);
+      setActionFeedback({
+        type: "error",
+        msg: err?.reason || err?.message || "Transaction failed.",
+      });
+    } finally {
+      setIsLoadingTransaction(false);
+    }
   };
 
   const handleApply = (gig: GigItem) => {
@@ -374,76 +399,92 @@ export const MarketplacePage: React.FC = () => {
     });
   };
 
-  const handleAcceptProposal = (gigId: string, proposal: ProposalItem) => {
+  const handleAcceptProposal = async (gigId: string, proposal: ProposalItem) => {
     const targetGig = gigs.find((g) => g.id === gigId);
     if (!targetGig) return;
 
-    const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + ", " + new Date().toLocaleDateString();
-
-    const updatedGigs = gigs.map((g) => {
-      if (g.id === gigId) {
-        const updatedProposals = (g.proposals || []).map((p) => {
-          if (p.id === proposal.id) {
-            return { ...p, status: "Accepted" as const };
-          }
-          return p;
-        });
-
-        return {
-          ...g,
-          status: "Active" as const,
-          assignedFreelancer: proposal.freelancerAddress,
-          freelancer: proposal.freelancerAddress,
-          acceptedAt: nowStr,
-          proposals: updatedProposals,
-        };
-      }
-      return g;
-    });
-
-    setGigs(updatedGigs);
-
-    // Sync milestones into localStorage for Dashboard
     try {
-      const savedMilestonesRaw = localStorage.getItem("zx_dashboard_milestones");
-      let currentMilestones: any[] = [];
-      if (savedMilestonesRaw) {
-        currentMilestones = JSON.parse(savedMilestonesRaw);
+      setIsLoadingTransaction(true);
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      // Hardcode gigId to 1 for now since we don't have the real on-chain ID
+      const tx = await escrow.assignAndFund(1, proposal.freelancerAddress, ethers.ZeroHash, "QmAgreement");
+      await tx.wait();
+
+      const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + ", " + new Date().toLocaleDateString();
+
+      const updatedGigs = gigs.map((g) => {
+        if (g.id === gigId) {
+          const updatedProposals = (g.proposals || []).map((p) => {
+            if (p.id === proposal.id) {
+              return { ...p, status: "Accepted" as const };
+            }
+            return p;
+          });
+
+          return {
+            ...g,
+            status: "Active" as const,
+            assignedFreelancer: proposal.freelancerAddress,
+            freelancer: proposal.freelancerAddress,
+            acceptedAt: nowStr,
+            proposals: updatedProposals,
+          };
+        }
+        return g;
+      });
+
+      setGigs(updatedGigs);
+
+      // Sync milestones into localStorage for Dashboard
+      try {
+        const savedMilestonesRaw = localStorage.getItem("zx_dashboard_milestones");
+        let currentMilestones: any[] = [];
+        if (savedMilestonesRaw) {
+          currentMilestones = JSON.parse(savedMilestonesRaw);
+        }
+
+        const existingTitles = new Set(currentMilestones.map((m: any) => m.label));
+        const newItems = targetGig.milestones
+          .filter((m) => !existingTitles.has(`${targetGig.title} — ${m.title}`))
+          .map((m, idx) => ({
+            id: Date.now() + idx,
+            num: currentMilestones.length + idx + 1,
+            label: `${targetGig.title} — ${m.title}`,
+            amount: m.amount,
+            description: m.acceptanceCriteria,
+            status: "pending",
+            gigId: targetGig.id,
+            freelancerAddress: proposal.freelancerAddress,
+          }));
+
+        if (newItems.length > 0) {
+          const combined = [...currentMilestones, ...newItems];
+          localStorage.setItem("zx_dashboard_milestones", JSON.stringify(combined));
+          window.dispatchEvent(new Event("zx_milestones_updated"));
+        }
+      } catch (err) {
+        console.error("Failed to sync milestones to dashboard", err);
       }
 
-      const existingTitles = new Set(currentMilestones.map((m: any) => m.label));
-      const newItems = targetGig.milestones
-        .filter((m) => !existingTitles.has(`${targetGig.title} — ${m.title}`))
-        .map((m, idx) => ({
-          id: Date.now() + idx,
-          num: currentMilestones.length + idx + 1,
-          label: `${targetGig.title} — ${m.title}`,
-          amount: m.amount,
-          description: m.acceptanceCriteria,
-          status: "pending",
-          gigId: targetGig.id,
-          freelancerAddress: proposal.freelancerAddress,
-        }));
-
-      if (newItems.length > 0) {
-        const combined = [...currentMilestones, ...newItems];
-        localStorage.setItem("zx_dashboard_milestones", JSON.stringify(combined));
-        window.dispatchEvent(new Event("zx_milestones_updated"));
+      // Update activeGig modal view
+      const refreshedGig = updatedGigs.find((g) => g.id === gigId);
+      if (refreshedGig) {
+        setActiveGig(refreshedGig);
       }
-    } catch (err) {
-      console.error("Failed to sync milestones to dashboard", err);
-    }
 
-    // Update activeGig modal view
-    const refreshedGig = updatedGigs.find((g) => g.id === gigId);
-    if (refreshedGig) {
-      setActiveGig(refreshedGig);
+      setActionFeedback({
+        type: "success",
+        msg: `Proposal accepted! Work has officially started for "${targetGig.title}". Milestones are locked in Escrow on MST Testnet.`,
+      });
+    } catch (err: any) {
+      console.error(err);
+      setActionFeedback({
+        type: "error",
+        msg: err?.reason || err?.message || "Transaction failed.",
+      });
+    } finally {
+      setIsLoadingTransaction(false);
     }
-
-    setActionFeedback({
-      type: "success",
-      msg: `Proposal accepted! Work has officially started for "${targetGig.title}". Milestones are locked in Escrow on MST Testnet.`,
-    });
   };
 
   return (

@@ -1,7 +1,7 @@
 {
   "testnet": {
     "ZentrixReputation": {
-      "address": "0xB224Bd880326a5046F8526461d25fa5217636cA3",
+      "address": "0xbF3cB5e2163b0e6df4825EDb5a16d81f7c6D8502",
       "abi": [
         {
           "inputs": [],
@@ -902,7 +902,7 @@
       "constructorArguments": []
     },
     "ZentrixEscrow": {
-      "address": "0xa50759E9CE985Fbb06503CaeC0DB9D1fB1233726",
+      "address": "0x5d349C7C35408a87dc113e8438113e057e306165",
       "abi": [
         {
           "inputs": [
@@ -2289,11 +2289,11 @@
       ],
       "constructorArguments": [
         "0x73595081334A18D4298A160b162faB4Fb4B3c85B",
-        "0xB224Bd880326a5046F8526461d25fa5217636cA3"
+        "0xbF3cB5e2163b0e6df4825EDb5a16d81f7c6D8502"
       ]
     },
     "ZentrixPass": {
-      "address": "0xE33932ba495ff04b321a2c7E58C34b43A7Ff2e9b",
+      "address": "0x3106772B6F7481ec7B71776B78268D16aD9952D3",
       "abi": [
         {
           "inputs": [],

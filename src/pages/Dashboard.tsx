@@ -97,7 +97,7 @@ export const DashboardPage: React.FC = () => {
   });
 
   const [milestoneNotice, setMilestoneNotice] = useState<{
-    type: "success" | "info" | "warning";
+    type: "success" | "info" | "warning" | "error";
     message: string;
   } | null>(null);
 
@@ -131,52 +131,74 @@ export const DashboardPage: React.FC = () => {
   const [withdrawing, setWithdrawing] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [txStatus, setTxStatus] = useState<"pending" | "confirmed" | null>(null);
-  const [withdrawFeedback, setWithdrawFeedback] = useState<{ type: "error" | "info"; msg: string } | null>(null);
+  const [withdrawFeedback, setWithdrawFeedback] = useState<{ type: "error" | "info" | "warning"; msg: string } | null>(null);
 
   // Freelancer submits milestone for review
-  const handleSubmitForReview = (num: number) => {
+  const handleSubmitForReview = async (num: number) => {
     setMilestoneNotice(null);
-    setMilestones((prev) =>
-      prev.map((m) => {
-        if (m.num === num) {
-          // Hard Invariant: once approved, status cannot be changed
-          if (m.status === "approved") return m;
-          return {
-            ...m,
-            status: "review",
-            submittedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          };
-        }
-        return m;
-      })
-    );
-    setMilestoneNotice({
-      type: "success",
-      message: `Milestone #${num} deliverable submitted for review! Mentor / Client notified for approval.`,
-    });
+    try {
+      if (!signer) throw new Error("Wallet not connected");
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      
+      setMilestoneNotice({ type: "success", message: "Transaction pending on MST Testnet..." });
+      const tx = await escrow.submitMilestone(
+        1, // mock gigId since we rely on localStorage
+        num - 1, // index
+        "QmMockedEvidenceCID"
+      );
+      await tx.wait();
+
+      setMilestones((prev) =>
+        prev.map((m) => {
+          if (m.num === num) {
+            if (m.status === "approved") return m;
+            return {
+              ...m,
+              status: "review",
+              submittedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            };
+          }
+          return m;
+        })
+      );
+      setMilestoneNotice({ type: "success", message: `Milestone #${num} deliverable anchored on-chain!` });
+    } catch(err: any) {
+      setMilestoneNotice({ type: "error", message: err.message || "Transaction failed" });
+    }
   };
 
   // Client/Mentor approves milestone (Immutable - cannot be reverted!)
-  const handleApproveMilestone = (num: number) => {
+  const handleApproveMilestone = async (num: number) => {
     setMilestoneNotice(null);
-    setMilestones((prev) =>
-      prev.map((m) => {
-        if (m.num === num) {
-          // Hard Invariant: once approved, status cannot be changed
-          if (m.status === "approved") return m;
-          return {
-            ...m,
-            status: "approved",
-            approvedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          };
-        }
-        return m;
-      })
-    );
-    setMilestoneNotice({
-      type: "success",
-      message: `Milestone #${num} Approved! Escrow funds unlocked. Status is now permanent and cannot be changed.`,
-    });
+    try {
+      if (!signer) throw new Error("Wallet not connected");
+      const escrow = new ethers.Contract(CONTRACT_ADDRESSES.ZentrixEscrow, CONTRACT_ABIS.ZentrixEscrow, signer);
+      
+      setMilestoneNotice({ type: "success", message: "Transaction pending on MST Testnet..." });
+      const tx = await escrow.approveMilestone(
+        1, // mock gigId
+        num - 1, // index
+        5 // rating out of 5
+      );
+      await tx.wait();
+
+      setMilestones((prev) =>
+        prev.map((m) => {
+          if (m.num === num) {
+            if (m.status === "approved") return m;
+            return {
+              ...m,
+              status: "approved",
+              approvedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            };
+          }
+          return m;
+        })
+      );
+      setMilestoneNotice({ type: "success", message: `Milestone #${num} approved! Funds released on-chain!` });
+    } catch(err: any) {
+      setMilestoneNotice({ type: "error", message: err.message || "Transaction failed" });
+    }
   };
 
   // Find active milestone for Overview card
@@ -275,7 +297,7 @@ export const DashboardPage: React.FC = () => {
       setTxStatus("confirmed");
       await fetchMetrics(); // refresh after withdrawal
     } catch (err: any) {
-      setWithdrawFeedback({ type: "error", msg: err?.reason ?? err?.message ?? "Withdrawal transaction failed or was rejected." });
+      setWithdrawFeedback({ type: "warning", msg: err?.reason ?? err?.message ?? "Withdrawal transaction failed or was rejected." });
       setTxStatus(null);
     } finally {
       setWithdrawing(false);
@@ -520,7 +542,7 @@ export const DashboardPage: React.FC = () => {
             }`}
           >
             <img
-              src={metrics.passTier === 2 ? "/2.gif" : metrics.passTier === 1 ? "/1.gif" : "/Robot.png"}
+              src={metrics.passTier === 2 ? "/2.gif" : metrics.passTier === 1 ? "/1.gif" : "/robot.png"}
               alt={
                 metrics.passTier === 2
                   ? "Enterprise Pass NFT"

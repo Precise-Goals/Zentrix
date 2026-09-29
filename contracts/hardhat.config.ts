@@ -3,7 +3,7 @@ import { HardhatUserConfig } from "hardhat/config";
 import * as dotenv from "dotenv";
 
 // packages/contracts/.env.local doesn't exist — secrets live at the repo root.
-dotenv.config({ path: "../../.env.local" });
+dotenv.config({ path: "../.env.local" });
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const accounts = PRIVATE_KEY ? [PRIVATE_KEY] : [];

@@ -577,7 +577,7 @@ export const AgentPage: React.FC = () => {
               className="w-10 h-10 flex items-center justify-center p-0 shrink-0"
               style={{overflow:"hidden", background: "var(--zx-primary-deep)", borderRadius: "6rem" }}
             >
-                <img src="/Robot.png" alt="AI Bot" className="robocontain" />
+                <img src="/robot.png" alt="AI Bot" className="robocontain" />
             </div>
             <div>
               <h1 className="text-xl font-extrabold text-[var(--zx-ink)]">Zentrix AI Agent</h1>
@@ -656,7 +656,7 @@ export const AgentPage: React.FC = () => {
                 className="w-16 h-16 flex items-center justify-center p-3"
                 style={{ background: "var(--zx-surface-alt)", borderRadius: "1.25rem" }}
               >
-                <img src="/Robot.png" alt="AI Bot" className="w-10 h-10 object-contain" />
+                <img src="/robot.png" alt="AI Bot" className="w-10 h-10 object-contain" />
               </div>
               <div>
                 <p className="text-base font-bold text-[var(--zx-ink)]">Ask Zentrix AI</p>
@@ -722,7 +722,7 @@ export const AgentPage: React.FC = () => {
                   {m.role === "user" ? (
                     <User className="w-3.5 h-3.5" />
                   ) : (
-                    <img src="/Robot.png" alt="AI Bot" className="w-4 h-4 object-contain" />
+                    <img src="/robot.png" alt="AI Bot" className="w-4 h-4 object-contain" />
                   )}
                 </div>
 
