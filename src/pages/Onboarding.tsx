@@ -32,7 +32,7 @@ import {
 export const OnboardingPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as any)?.from || "/dashboard";
+  let from = (location.state as any)?.from || "/dashboard"; if (from === "/login" || from === "/onboarding") from = "/dashboard";
   const { user, profile, saveOnboarding } = useAuth();
   const { address, isConnected, isCorrectNetwork, switchNetwork, openConnectModal, signMessage, connectWallet } = useWallet();
 

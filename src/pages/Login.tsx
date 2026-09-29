@@ -21,7 +21,7 @@ export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, profile, loginWithGoogle, loginWithEmail, registerWithEmail } = useAuth();
-  const from = (location.state as any)?.from || "/dashboard";
+  let from = (location.state as any)?.from || "/dashboard"; if (from === "/login" || from === "/onboarding") from = "/dashboard";
 
   useEffect(() => {
     if (user) {

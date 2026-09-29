@@ -75,6 +75,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
+    // Process redirect sign-in if applicable
+    getRedirectResult(auth).catch(() => {});
+
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setUser(fbUser);
       if (fbUser) {
